@@ -61,6 +61,64 @@ npm run build
 - HTML5 Canvas API
 - Gray-Scott reaction-diffusion engine (Float32 arrays, 5-point stencil Laplacian)
 
+## MCP Server (AI Agent Integration)
+
+Mycelium includes an MCP server that lets AI agents (Claude, etc.) programmatically compose collages, run dream simulations, evaluate results visually, and iterate.
+
+### Setup
+
+```bash
+cd mcp-server
+npm install
+```
+
+### Add to Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "mycelium": {
+      "command": "node",
+      "args": ["C:/Users/YOUR_USER/Projects/AI_art_canvas/mcp-server/index.js"]
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+|---|---|
+| `mycelium_canvas_new` | Create a new canvas |
+| `mycelium_canvas_snapshot` | Get a PNG snapshot (returned as image) |
+| `mycelium_canvas_export` | Save canvas to disk |
+| `mycelium_layer_add_image` | Add image from file path or base64 |
+| `mycelium_layer_list` | List all layers with properties |
+| `mycelium_layer_update` | Change opacity, position, scale, rotation, blend mode |
+| `mycelium_layer_delete` | Remove a layer |
+| `mycelium_layer_duplicate` | Copy a layer |
+| `mycelium_layer_reorder` | Move layer up/down |
+| `mycelium_effect_apply` | Apply pixel effect (dither, pixelsort, glitch, etc.) |
+| `mycelium_dream_start` | Start RD simulation with preset, colormap, warp |
+| `mycelium_dream_step` | Advance N steps and return dream snapshot |
+| `mycelium_dream_set_params` | Change colormap/warp strength mid-dream |
+| `mycelium_dream_poke` | Inject seed perturbation |
+| `mycelium_dream_freeze` | Capture dream as new layer |
+| `mycelium_dream_stop` | Discard active dream |
+| `mycelium_dream_evolve_and_snapshot` | Step + optional freeze + full canvas snapshot |
+
+### Example Workflow
+
+An AI agent can:
+1. Load an image as a layer
+2. Duplicate it, apply pixelsort to the copy, set blend mode to "difference"
+3. Start a warp dream seeded from the image
+4. Step 200 iterations, evaluate the snapshot, adjust warp strength
+5. Freeze the dream, layer it with screen blend at 60% opacity
+6. Take a final snapshot and export
+
 ## Roadmap
 
 - Neural Cellular Automata (NCA) -- trained neural networks that grow/regenerate textures

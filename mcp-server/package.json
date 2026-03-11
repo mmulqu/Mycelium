@@ -1,0 +1,14 @@
+{
+  "name": "mycelium-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MCP server for Mycelium generative collage canvas",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@napi-rs/canvas": "^0.1.65"
+  }
+}
