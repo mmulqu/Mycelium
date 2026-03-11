@@ -1,0 +1,5 @@
+node_modules
+dist
+.vite
+massgis_data/
+.claude/
