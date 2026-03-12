@@ -1,0 +1,10 @@
+{
+  "name": "mycelium-image-search",
+  "version": "1.0.0",
+  "description": "Search and download images for Mycelium canvas sessions",
+  "type": "module",
+  "bin": {
+    "image-search": "./index.js"
+  },
+  "engines": { "node": ">=18" }
+}
