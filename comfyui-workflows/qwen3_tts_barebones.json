@@ -1,0 +1,72 @@
+{
+  "1": {
+    "inputs": {
+      "audio": "__REFERENCE_AUDIO__"
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "Load Reference Audio"
+    }
+  },
+  "2": {
+    "inputs": {
+      "ref_text": "__REF_TEXT__",
+      "model_choice": "0.6B",
+      "device": "auto",
+      "precision": "bf16",
+      "attention": "sdpa",
+      "x_vector_only": 1500,
+      "unload_model_after_generate": false,
+      "ref_audio": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "FB_Qwen3TTSVoiceClonePrompt",
+    "_meta": {
+      "title": "Voice Clone Prompt"
+    }
+  },
+  "4": {
+    "inputs": {
+      "target_text": "__TARGET_TEXT__",
+      "model_choice": "0.6B",
+      "device": "auto",
+      "precision": "bf16",
+      "language": "__LANGUAGE__",
+      "ref_text": "__REF_TEXT__",
+      "seed": "__SEED__",
+      "max_new_tokens": "__MAX_TOKENS__",
+
+      "top_p": false,
+      "top_k": false,
+      "temperature": "__TEMPERATURE__",
+      "repetition_penalty": "__REPETITION_PENALTY__",
+      "x_vector_only": false,
+      "attention": "sdpa",
+      "unload_model_after_generate": false,
+      "custom_model_path": "",
+      "voice_clone_prompt": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "FB_Qwen3TTSVoiceClone",
+    "_meta": {
+      "title": "Voice Clone Generate"
+    }
+  },
+  "5": {
+    "inputs": {
+      "filename_prefix": "__FILENAME_PREFIX__",
+      "audio": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "SaveAudio",
+    "_meta": {
+      "title": "Save Audio"
+    }
+  }
+}
