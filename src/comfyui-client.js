@@ -124,13 +124,20 @@ export class ComfyUIClient {
           + `&subfolder=${encodeURIComponent(img.subfolder ?? "")}`
           + `&type=${img.type ?? "output"}`;
 
-        const blob = await (await fetch(imgUrl)).blob();
-        return await new Promise((res, rej) => {
-          const reader = new FileReader();
-          reader.onload = () => res(reader.result);
-          reader.onerror = rej;
-          reader.readAsDataURL(blob);
-        });
+        const response = await fetch(imgUrl);
+        const blob = await response.blob();
+        if (typeof FileReader !== "undefined") {
+          return await new Promise((res, rej) => {
+            const reader = new FileReader();
+            reader.onload = () => res(reader.result);
+            reader.onerror = rej;
+            reader.readAsDataURL(blob);
+          });
+        }
+
+        const buffer = Buffer.from(await blob.arrayBuffer());
+        const mime = blob.type || "image/png";
+        return `data:${mime};base64,${buffer.toString("base64")}`;
       }
     }
 

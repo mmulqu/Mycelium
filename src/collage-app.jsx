@@ -2,12 +2,14 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { ComfyUIClient } from './comfyui-client.js';
 import sd15Inpaint from '../comfyui-workflows/sd15-inpaint.json';
 import sdxlInpaint from '../comfyui-workflows/sdxl-inpaint-8gb.json';
+import zimageImg2Img from '../comfyui-workflows/zimage_img2img_barebones.json';
 
 const SAM2_URL = "http://127.0.0.1:7861";
 
 const COMFY_WORKFLOWS = {
-  "sd15-inpaint":    { label: "SD 1.5 Inpaint (4GB)",  template: sd15Inpaint },
-  "sdxl-inpaint-8g": { label: "SDXL Inpaint (8GB)",    template: sdxlInpaint },
+  "sd15-inpaint":    { label: "SD 1.5 Inpaint (4GB)",  template: sd15Inpaint, mode: "inpaint" },
+  "sdxl-inpaint-8g": { label: "SDXL Inpaint (8GB)",    template: sdxlInpaint, mode: "inpaint" },
+  "zimage-img2img":  { label: "ZImage Img2Img",        template: zimageImg2Img, mode: "img2img" },
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -123,6 +125,24 @@ function cropLayerImage(layer, cropX, cropY, cropW, cropH) {
       tc.getContext("2d").drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
       resolve(tc.toDataURL("image/png"));
     };
+  });
+}
+
+function loadImageDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
   });
 }
 
@@ -651,15 +671,17 @@ const [saveStatus, setSaveStatus] = useState("");
   }, []);
 
   // ComfyUI inpaint panel
-  const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188");
+  const [comfyUrl, setComfyUrl] = useState("/api/comfyui");
   const [comfyWorkflow, setComfyWorkflow] = useState("sd15-inpaint");
   const [comfyPrompt, setComfyPrompt] = useState("");
   const [comfyNegPrompt, setComfyNegPrompt] = useState("blurry, low quality, watermark");
   const [comfyDenoise, setComfyDenoise] = useState(0.75);
-  const [comfySteps, setComfySteps] = useState(25);
+  const [comfySteps, setComfySteps] = useState(8);
+  const [comfyInputSource, setComfyInputSource] = useState("selected-layer");
+  const [comfyUploadImage, setComfyUploadImage] = useState(null);   // { name, dataUrl }
   const [comfyStatus, setComfyStatus] = useState("idle"); // idle | running | done | error:...
   const [comfyResult, setComfyResult] = useState(null);           // base64 result image
-  const [comfyResultBounds, setComfyResultBounds] = useState(null); // {x,y,scaleX,scaleY}
+  const [comfyResultBounds, setComfyResultBounds] = useState(null); // {x,y,scaleX,scaleY,rotation,name}
 
   // Load state
   useEffect(() => {
@@ -1512,17 +1534,95 @@ const [saveStatus, setSaveStatus] = useState("");
    * (polygon or SAM mask), build a matching mask, send both to ComfyUI,
    * and store the result ready to be accepted as a new layer.
    */
-  const runComfyInpaint = useCallback(async () => {
-    const PAD = 32; // px padding around the region in image-space
+  const handleComfyUpload = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setComfyUploadImage({ name: file.name, dataUrl });
+    } catch (err) {
+      console.error("Comfy upload source failed:", err);
+      setComfyStatus("error: failed to load upload");
+    }
+    e.target.value = "";
+  }, []);
 
-    let srcLayer = layers.find(l => l.id === selectedLayerId);
-    if (!srcLayer?.imageData) return;
+  const runComfyGenerate = useCallback(async () => {
+    const PAD = 32; // px padding around the region in image-space
 
     setComfyStatus("running");
     try {
-      const img = await new Promise(res => {
-        const i = new Image(); i.onload = () => res(i); i.src = srcLayer.imageData;
-      });
+      const client = new ComfyUIClient(comfyUrl);
+      const workflowDef = COMFY_WORKFLOWS[comfyWorkflow];
+      const workflowTemplate = workflowDef?.template;
+      if (!workflowTemplate) throw new Error("Unknown workflow");
+
+      if (workflowDef.mode === "img2img") {
+        let imageDataUrl, resultName, placement;
+
+        if (comfyInputSource === "selected-layer") {
+          const srcLayer = layers.find(l => l.id === selectedLayerId);
+          if (!srcLayer?.imageData) throw new Error("Select an image layer first");
+          imageDataUrl = srcLayer.imageData;
+          const srcImg = await loadImageDataUrl(srcLayer.imageData);
+          resultName = `${srcLayer.name} (AI)`;
+          placement = { type: "layer", layer: srcLayer, displayW: srcImg.width * srcLayer.scaleX, displayH: srcImg.height * srcLayer.scaleY };
+        } else {
+          if (!comfyUploadImage?.dataUrl) throw new Error("Choose an upload image first");
+          imageDataUrl = comfyUploadImage.dataUrl;
+          resultName = `${comfyUploadImage.name.replace(/\.[^.]+$/, "")} (AI)`;
+          placement = { type: "upload" };
+        }
+
+        setComfyStatus("uploading...");
+        const inputName = await client.uploadImage(imageDataUrl, "img2img_input.png");
+        setComfyStatus("queuing workflow...");
+        const workflow = client.fillTemplate(workflowTemplate, {
+          INPUT_IMAGE: inputName,
+          POSITIVE_PROMPT: comfyPrompt,
+          NEGATIVE_PROMPT: comfyNegPrompt,
+          DENOISE: comfyDenoise,
+          STEPS: comfySteps,
+          CFG: 1,
+          SEED: Math.floor(Math.random() * 2 ** 31),
+        });
+        const promptId = await client.queuePrompt(workflow);
+        setComfyStatus("generating...");
+        const resultDataUrl = await client.pollResult(promptId);
+        const resultImg = await loadImageDataUrl(resultDataUrl);
+
+        if (placement.type === "layer") {
+          const srcLayer = placement.layer;
+          setComfyResultBounds({
+            x: srcLayer.x,
+            y: srcLayer.y,
+            scaleX: placement.displayW / resultImg.width,
+            scaleY: placement.displayH / resultImg.height,
+            rotation: srcLayer.rotation,
+            name: resultName,
+          });
+        } else {
+          let scale = 1;
+          if (resultImg.width > canvasSize.width * 0.8) scale = (canvasSize.width * 0.6) / resultImg.width;
+          if (resultImg.height * scale > canvasSize.height * 0.8) scale = (canvasSize.height * 0.6) / resultImg.height;
+          setComfyResultBounds({
+            x: Math.round(canvasSize.width / 2 - (resultImg.width * scale) / 2),
+            y: Math.round(canvasSize.height / 2 - (resultImg.height * scale) / 2),
+            scaleX: scale,
+            scaleY: scale,
+            rotation: 0,
+            name: resultName,
+          });
+        }
+
+        setComfyResult(resultDataUrl);
+        setComfyStatus("done");
+        return;
+      }
+
+      let srcLayer = layers.find(l => l.id === selectedLayerId);
+      if (!srcLayer?.imageData) throw new Error("Select an image layer first");
+      const img = await loadImageDataUrl(srcLayer.imageData);
 
       let cropX, cropY, cropW, cropH, imageDataUrl, maskDataUrl, placementX, placementY;
 
@@ -1566,10 +1666,6 @@ const [saveStatus, setSaveStatus] = useState("");
         return;
       }
 
-      const client = new ComfyUIClient(comfyUrl);
-      const workflowTemplate = COMFY_WORKFLOWS[comfyWorkflow]?.template;
-      if (!workflowTemplate) throw new Error("Unknown workflow");
-
       const resultDataUrl = await client.runInpaint({
         imageDataUrl,
         maskDataUrl,
@@ -1583,22 +1679,25 @@ const [saveStatus, setSaveStatus] = useState("");
       });
 
       setComfyResult(resultDataUrl);
-      setComfyResultBounds({ x: placementX, y: placementY, scaleX: srcLayer.scaleX, scaleY: srcLayer.scaleY });
+      setComfyResultBounds({
+        x: placementX, y: placementY, scaleX: srcLayer.scaleX, scaleY: srcLayer.scaleY,
+        rotation: 0, name: "AI Inpaint",
+      });
       setComfyStatus("done");
     } catch (e) {
       console.error("ComfyUI inpaint failed:", e);
       setComfyStatus("error: " + e.message);
     }
   }, [layers, selectedLayerId, regionClosed, regionPoints, samMask, samMaskDims,
-      comfyUrl, comfyWorkflow, comfyPrompt, comfyNegPrompt, comfyDenoise, comfySteps]);
+      comfyUrl, comfyWorkflow, comfyPrompt, comfyNegPrompt, comfyDenoise, comfySteps, comfyInputSource, comfyUploadImage, canvasSize]);
 
   const acceptComfyResult = useCallback(() => {
     if (!comfyResult || !comfyResultBounds) return;
     const nl = {
-      id: uid(), name: "AI Inpaint", visible: true, locked: false, opacity: 1,
+      id: uid(), name: comfyResultBounds.name || "AI Result", visible: true, locked: false, opacity: 1,
       blendMode: "source-over", x: comfyResultBounds.x, y: comfyResultBounds.y,
       scaleX: comfyResultBounds.scaleX, scaleY: comfyResultBounds.scaleY,
-      rotation: 0, imageData: comfyResult, clipPath: null,
+      rotation: comfyResultBounds.rotation ?? 0, imageData: comfyResult, clipPath: null,
     };
     setLayers(prev => [nl, ...prev]);
     setSelectedLayerId(nl.id);
@@ -1631,6 +1730,12 @@ const [saveStatus, setSaveStatus] = useState("");
     : "bg-transparent border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"}`;
   const fxBtn = "px-3 py-1.5 text-xs font-mono bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-pink-500/20 hover:border-pink-500/50 hover:text-pink-300 transition-all";
   const dreamBtn = (on) => `px-3 py-1.5 text-xs font-mono border transition-all ${on ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300" : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-emerald-500/50 hover:text-emerald-300"}`;
+  const comfyWorkflowDef = COMFY_WORKFLOWS[comfyWorkflow];
+  const comfyIsImg2Img = comfyWorkflowDef?.mode === "img2img";
+  const comfySelectedLayer = layers.find(l => l.id === selectedLayerId);
+  const comfyCanGenerate = comfyIsImg2Img
+    ? (comfyInputSource === "selected-layer" ? !!comfySelectedLayer?.imageData : !!comfyUploadImage?.dataUrl)
+    : (regionClosed || !!samMask);
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 text-zinc-200 overflow-hidden" style={{ fontFamily: "'JetBrains Mono', 'Fira Code', monospace" }}>
@@ -1935,6 +2040,41 @@ const [saveStatus, setSaveStatus] = useState("");
                 ))}
               </select>
             </div>
+            {comfyIsImg2Img && (
+              <div className="space-y-2">
+                <div>
+                  <p className="text-xs text-zinc-600 mb-1">Input source</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    <button onClick={() => setComfyInputSource("selected-layer")}
+                      className={`py-1.5 text-xs border transition-all ${comfyInputSource === "selected-layer" ? "bg-orange-500/20 border-orange-500 text-orange-300" : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"}`}>
+                      Selected layer
+                    </button>
+                    <button onClick={() => setComfyInputSource("upload")}
+                      className={`py-1.5 text-xs border transition-all ${comfyInputSource === "upload" ? "bg-orange-500/20 border-orange-500 text-orange-300" : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"}`}>
+                      Upload image
+                    </button>
+                  </div>
+                </div>
+                {comfyInputSource === "selected-layer" ? (
+                  <p className="text-xs text-zinc-500">
+                    {comfySelectedLayer?.imageData ? `Using layer: ${comfySelectedLayer.name}` : "Select an image layer to use as img2img input."}
+                  </p>
+                ) : (
+                  <div className="space-y-1">
+                    <input type="file" accept="image/*" onChange={handleComfyUpload}
+                      className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-400 px-2 py-1 file:mr-2 file:border-0 file:bg-orange-500/20 file:px-2 file:py-1 file:text-orange-300" />
+                    <p className="text-xs text-zinc-500">
+                      {comfyUploadImage?.name ? `Using upload: ${comfyUploadImage.name}` : "Choose an image file to generate from."}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+            {!comfyIsImg2Img && (
+              <p className="text-xs text-zinc-500">
+                {regionClosed ? "Using polygon region from canvas." : samMask ? "Using SAM mask from selected layer." : "Draw a region or create a SAM mask first."}
+              </p>
+            )}
             <div>
               <p className="text-xs text-zinc-600 mb-1">Prompt</p>
               <textarea value={comfyPrompt} onChange={e => setComfyPrompt(e.target.value)}
@@ -1959,9 +2099,9 @@ const [saveStatus, setSaveStatus] = useState("");
               </div>
             </div>
             {comfyStatus === "idle" && (
-              <button onClick={runComfyInpaint} disabled={!regionClosed && !samMask}
+              <button onClick={runComfyGenerate} disabled={!comfyCanGenerate}
                 className={`w-full py-2 text-xs font-bold uppercase tracking-wider border transition-all ${
-                  (regionClosed || samMask) ? "bg-orange-500/20 border-orange-500 text-orange-300 hover:bg-orange-500/30" : "border-zinc-700 text-zinc-600 cursor-not-allowed"}`}>
+                  comfyCanGenerate ? "bg-orange-500/20 border-orange-500 text-orange-300 hover:bg-orange-500/30" : "border-zinc-700 text-zinc-600 cursor-not-allowed"}`}>
                 ▶ Generate
               </button>
             )}
@@ -1984,7 +2124,7 @@ const [saveStatus, setSaveStatus] = useState("");
                   <button onClick={() => { setComfyResult(null); setComfyResultBounds(null); setComfyStatus("idle"); }}
                     className="py-1.5 text-xs border border-zinc-700 text-zinc-400 hover:text-red-400 hover:border-red-700 transition-all">✕ Discard</button>
                 </div>
-                <button onClick={runComfyInpaint} className="w-full py-1 text-xs border border-orange-500/40 text-orange-400 hover:bg-orange-500/10">↺ Regenerate</button>
+                <button onClick={runComfyGenerate} className="w-full py-1 text-xs border border-orange-500/40 text-orange-400 hover:bg-orange-500/10">↺ Regenerate</button>
               </div>
             )}
           </div>
