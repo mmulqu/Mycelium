@@ -10,6 +10,8 @@ const TOOLS = {
   DRAW: "draw",
   PAN: "pan",
   DREAM: "dream",
+  WAND: "wand",       // Magic Wand flood-fill selection
+  SEGMENT: "segment", // SAM AI object segmentation
 };
 
 const BLEND_MODES = [
@@ -291,6 +293,155 @@ const applyChromatic = (ctx, x, y, w, h, offset = 5) => {
   ctx.putImageData(imageData, x, y);
 };
 
+// Gaussian blur (box approximation, 3×3 kernel, multiple passes)
+const applyBlur = (ctx, x, y, w, h, passes = 3) => {
+  const kernel = [1/16, 2/16, 1/16, 2/16, 4/16, 2/16, 1/16, 2/16, 1/16];
+  for (let p = 0; p < passes; p++) {
+    const imageData = ctx.getImageData(x, y, w, h);
+    const src = new Uint8ClampedArray(imageData.data);
+    const data = imageData.data;
+    for (let iy = 1; iy < h - 1; iy++) {
+      for (let ix = 1; ix < w - 1; ix++) {
+        let r = 0, g = 0, b = 0;
+        for (let ky = -1; ky <= 1; ky++) {
+          for (let kx = -1; kx <= 1; kx++) {
+            const ki = (ky + 1) * 3 + (kx + 1);
+            const si = ((iy + ky) * w + (ix + kx)) * 4;
+            r += kernel[ki] * src[si]; g += kernel[ki] * src[si+1]; b += kernel[ki] * src[si+2];
+          }
+        }
+        const idx = (iy * w + ix) * 4;
+        data[idx] = r; data[idx+1] = g; data[idx+2] = b;
+      }
+    }
+    ctx.putImageData(imageData, x, y);
+  }
+};
+
+// Sobel edge detection → white edges on black (ControlNet Canny conditioning map)
+const applyEdge = (ctx, x, y, w, h) => {
+  const imageData = ctx.getImageData(x, y, w, h);
+  const src = new Uint8ClampedArray(imageData.data);
+  const data = imageData.data;
+  const gray = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) gray[i] = 0.299*src[i*4] + 0.587*src[i*4+1] + 0.114*src[i*4+2];
+  for (let iy = 1; iy < h - 1; iy++) {
+    for (let ix = 1; ix < w - 1; ix++) {
+      const gx = -gray[(iy-1)*w+(ix-1)] + gray[(iy-1)*w+(ix+1)]
+               - 2*gray[iy*w+(ix-1)] + 2*gray[iy*w+(ix+1)]
+               - gray[(iy+1)*w+(ix-1)] + gray[(iy+1)*w+(ix+1)];
+      const gy = -gray[(iy-1)*w+(ix-1)] - 2*gray[(iy-1)*w+ix] - gray[(iy-1)*w+(ix+1)]
+               + gray[(iy+1)*w+(ix-1)] + 2*gray[(iy+1)*w+ix] + gray[(iy+1)*w+(ix+1)];
+      const mag = Math.min(255, Math.sqrt(gx*gx + gy*gy) * 2);
+      const idx = (iy * w + ix) * 4;
+      data[idx] = data[idx+1] = data[idx+2] = mag;
+    }
+  }
+  ctx.putImageData(imageData, x, y);
+};
+
+// RGB surface-normal / emboss effect (ControlNet Normal map proxy)
+const applyEmboss = (ctx, x, y, w, h) => {
+  const imageData = ctx.getImageData(x, y, w, h);
+  const src = new Uint8ClampedArray(imageData.data);
+  const data = imageData.data;
+  const kx = [-1,0,1,-2,0,2,-1,0,1]; // Sobel X
+  const ky = [-1,-2,-1,0,0,0,1,2,1]; // Sobel Y
+  for (let iy = 1; iy < h - 1; iy++) {
+    for (let ix = 1; ix < w - 1; ix++) {
+      let gx = 0, gy = 0;
+      for (let i = 0; i < 9; i++) {
+        const dx = (i%3)-1, dy = Math.floor(i/3)-1;
+        const si = ((iy+dy)*w+(ix+dx))*4;
+        const lum = 0.299*src[si] + 0.587*src[si+1] + 0.114*src[si+2];
+        gx += kx[i]*lum; gy += ky[i]*lum;
+      }
+      const idx = (iy*w+ix)*4;
+      data[idx]   = Math.max(0, Math.min(255, gx/4 + 128)); // R = X normal
+      data[idx+1] = Math.max(0, Math.min(255, gy/4 + 128)); // G = Y normal
+      data[idx+2] = 200; // B = Z normal (mostly pointing out)
+    }
+  }
+  ctx.putImageData(imageData, x, y);
+};
+
+// Luminance depth approximation: bright = close, dark = far (depth map heuristic)
+const applyDepth = (ctx, x, y, w, h) => {
+  const imageData = ctx.getImageData(x, y, w, h);
+  const data = imageData.data;
+  for (let i = 0; i < w*h; i++) {
+    const lum = 0.299*data[i*4] + 0.587*data[i*4+1] + 0.114*data[i*4+2];
+    data[i*4] = data[i*4+1] = data[i*4+2] = 255 - lum; // invert: dark=far
+  }
+  ctx.putImageData(imageData, x, y);
+  // Blur for smooth depth field
+  applyBlur(ctx, x, y, w, h, 4);
+  // Vignette: edges farther
+  const d2 = ctx.getImageData(x, y, w, h);
+  for (let iy = 0; iy < h; iy++) {
+    for (let ix = 0; ix < w; ix++) {
+      const dx = (ix/w-0.5)*2, dy = (iy/h-0.5)*2;
+      const v = Math.max(0, 1 - (dx*dx+dy*dy)*0.4);
+      const idx = (iy*w+ix)*4;
+      d2.data[idx] = Math.round(d2.data[idx]*v);
+      d2.data[idx+1] = Math.round(d2.data[idx+1]*v);
+      d2.data[idx+2] = Math.round(d2.data[idx+2]*v);
+    }
+  }
+  ctx.putImageData(d2, x, y);
+};
+
+// ─── MAGIC WAND UTILITIES ────────────────────────────────────────────────────
+
+// BFS flood-fill from (seedX, seedY) on RGBA pixel buffer, returns Uint8Array mask
+function floodFill(pixels, w, h, seedX, seedY, tolerance) {
+  const mask = new Uint8Array(w * h);
+  const si = (seedY * w + seedX) * 4;
+  const sr = pixels[si], sg = pixels[si+1], sb = pixels[si+2];
+  const queue = [seedY * w + seedX];
+  mask[seedY * w + seedX] = 1;
+  while (queue.length) {
+    const idx = queue.shift();
+    const px = idx % w, py = Math.floor(idx / w);
+    for (const [nx, ny] of [[px-1,py],[px+1,py],[px,py-1],[px,py+1]]) {
+      if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+      const ni = ny * w + nx;
+      if (mask[ni]) continue;
+      const pi = ni * 4;
+      const dr = pixels[pi]-sr, dg = pixels[pi+1]-sg, db = pixels[pi+2]-sb;
+      if (Math.sqrt(dr*dr+dg*dg+db*db) <= tolerance) { mask[ni] = 1; queue.push(ni); }
+    }
+  }
+  return mask;
+}
+
+// Trace the outer boundary of a boolean mask as a clockwise polygon (simplified)
+function traceSelectionBoundary(mask, w, h, step = 5) {
+  const points = [];
+  // Find bounding box
+  let minX=w, minY=h, maxX=0, maxY=0;
+  for (let y=0; y<h; y++) for (let x=0; x<w; x++) {
+    if (mask[y*w+x]) { minX=Math.min(minX,x); minY=Math.min(minY,y); maxX=Math.max(maxX,x); maxY=Math.max(maxY,y); }
+  }
+  // Top edge: leftmost filled pixel per column
+  for (let x=minX; x<=maxX; x+=step) {
+    for (let y=minY; y<=maxY; y++) { if (mask[y*w+x]) { points.push({x,y}); break; } }
+  }
+  // Right edge: topmost filled pixel per row (right side)
+  for (let y=minY; y<=maxY; y+=step) {
+    for (let x=maxX; x>=minX; x--) { if (mask[y*w+x]) { points.push({x,y}); break; } }
+  }
+  // Bottom edge: rightmost column, reversed
+  for (let x=maxX; x>=minX; x-=step) {
+    for (let y=maxY; y>=minY; y--) { if (mask[y*w+x]) { points.push({x,y}); break; } }
+  }
+  // Left edge: bottom to top
+  for (let y=maxY; y>=minY; y-=step) {
+    for (let x=minX; x<=maxX; x++) { if (mask[y*w+x]) { points.push({x,y}); break; } }
+  }
+  return points;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // STORAGE
 // ═══════════════════════════════════════════════════════════════
@@ -367,6 +518,21 @@ export default function CollageWorkspace() {
   const [dreamRes, setDreamRes] = useState(200);
   const [dreamSeedLayerId, setDreamSeedLayerId] = useState(null);
   const [dreamWarpStrength, setDreamWarpStrength] = useState(15);
+
+  // Magic Wand
+  const [wandTolerance, setWandTolerance] = useState(30);
+  const [wandSelection, setWandSelection] = useState(null); // { mask, imgW, imgH, layerId }
+  const wandMaskCanvasRef = useRef(null); // offscreen canvas for wand overlay
+
+  // SAM Segment
+  const [samStatus, setSamStatus] = useState("idle"); // idle | loading | embedding | ready | segmenting | error
+  const [samMask, setSamMask] = useState(null); // Uint8Array boolean mask
+  const [samMaskDims, setSamMaskDims] = useState(null); // { w, h, layerId }
+  const samModelRef = useRef(null);
+  const samProcessorRef = useRef(null);
+  const samEmbeddingRef = useRef(null); // cached embedding
+  const samEmbedLayerIdRef = useRef(null); // which layer was embedded
+  const samMaskCanvasRef = useRef(null); // offscreen canvas for SAM mask overlay
 
   // Load state
   useEffect(() => {
@@ -546,7 +712,60 @@ export default function CollageWorkspace() {
       for (const pt of dreamPaintPoints) { ctx.beginPath(); ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2); ctx.fill(); }
       ctx.restore();
     }
-  }, [layers, selectedLayerId, tool, drawingPaths, isLassoing, lassoPoints, dreamActive, dreamRegion, dreamPaintPoints]);
+
+    // Magic Wand selection overlay
+    if (tool === TOOLS.WAND && wandSelection) {
+      const layer = layers.find(l => l.id === wandSelection.layerId);
+      if (layer) {
+        const { mask, imgW, imgH } = wandSelection;
+        // Build overlay canvas if needed
+        if (!wandMaskCanvasRef.current ||
+            wandMaskCanvasRef.current.width !== imgW ||
+            wandMaskCanvasRef.current.height !== imgH) {
+          wandMaskCanvasRef.current = document.createElement("canvas");
+          wandMaskCanvasRef.current.width = imgW;
+          wandMaskCanvasRef.current.height = imgH;
+        }
+        const mc = wandMaskCanvasRef.current;
+        const mCtx = mc.getContext("2d");
+        const mData = mCtx.createImageData(imgW, imgH);
+        for (let i = 0; i < mask.length; i++) {
+          if (mask[i]) { mData.data[i*4]=100; mData.data[i*4+1]=220; mData.data[i*4+2]=255; mData.data[i*4+3]=120; }
+        }
+        mCtx.putImageData(mData, 0, 0);
+        ctx.save();
+        ctx.globalAlpha = 0.7;
+        ctx.drawImage(mc, layer.x, layer.y, imgW * layer.scaleX, imgH * layer.scaleY);
+        ctx.restore();
+      }
+    }
+
+    // SAM mask overlay
+    if (tool === TOOLS.SEGMENT && samMask && samMaskDims) {
+      const layer = layers.find(l => l.id === samMaskDims.layerId);
+      if (layer) {
+        const { w: mw, h: mh } = samMaskDims;
+        if (!samMaskCanvasRef.current ||
+            samMaskCanvasRef.current.width !== mw ||
+            samMaskCanvasRef.current.height !== mh) {
+          samMaskCanvasRef.current = document.createElement("canvas");
+          samMaskCanvasRef.current.width = mw;
+          samMaskCanvasRef.current.height = mh;
+        }
+        const mc = samMaskCanvasRef.current;
+        const mCtx = mc.getContext("2d");
+        const mData = mCtx.createImageData(mw, mh);
+        for (let i = 0; i < samMask.length; i++) {
+          if (samMask[i]) { mData.data[i*4]=255; mData.data[i*4+1]=80; mData.data[i*4+2]=180; mData.data[i*4+3]=130; }
+        }
+        mCtx.putImageData(mData, 0, 0);
+        ctx.save();
+        ctx.globalAlpha = 0.75;
+        ctx.drawImage(mc, layer.x, layer.y, mw * layer.scaleX, mh * layer.scaleY);
+        ctx.restore();
+      }
+    }
+  }, [layers, selectedLayerId, tool, drawingPaths, isLassoing, lassoPoints, dreamActive, dreamRegion, dreamPaintPoints, wandSelection, samMask, samMaskDims]);
 
   useEffect(() => {
     const loads = layers.filter(l => l.imageData).map(l =>
@@ -750,6 +969,8 @@ export default function CollageWorkspace() {
     }
     if (tool === TOOLS.LASSO) { setIsLassoing(true); setLassoPoints([pos]); return; }
     if (tool === TOOLS.DRAW) { setCurrentPath({ points: [pos], color: brushColor, size: brushSize }); return; }
+    if (tool === TOOLS.WAND) { doWandSelect(pos.x, pos.y); return; }
+    if (tool === TOOLS.SEGMENT) { doSAMClick(pos.x, pos.y); return; }
     if (tool === TOOLS.SELECT) {
       for (const layer of layers) {
         if (!layer.visible || layer.locked || !layer.imageData) continue;
@@ -830,6 +1051,10 @@ export default function CollageWorkspace() {
         case "halftone": { const d2=tCtx.getImageData(0,0,img.width,img.height); tCtx.fillStyle="#000"; tCtx.fillRect(0,0,img.width,img.height); const dot=6;
           for(let y=0;y<img.height;y+=dot) for(let x=0;x<img.width;x+=dot) { const i=(y*img.width+x)*4; const b=(d2.data[i]+d2.data[i+1]+d2.data[i+2])/3/255;
             tCtx.fillStyle=`rgb(${d2.data[i]},${d2.data[i+1]},${d2.data[i+2]})`; tCtx.beginPath(); tCtx.arc(x+dot/2,y+dot/2,b*dot/2,0,Math.PI*2); tCtx.fill(); } break; }
+        case "blur": applyBlur(tCtx, 0, 0, img.width, img.height, 3); break;
+        case "edge": applyEdge(tCtx, 0, 0, img.width, img.height); break;
+        case "emboss": applyEmboss(tCtx, 0, 0, img.width, img.height); break;
+        case "depth": applyDepth(tCtx, 0, 0, img.width, img.height); break;
       }
       updateLayer(selectedLayerId, { imageData: tc.toDataURL() });
     };
@@ -839,6 +1064,195 @@ export default function CollageWorkspace() {
   const clearClip = () => { if (selectedLayerId) updateLayer(selectedLayerId, { clipPath: null }); };
   const exportCanvas = () => { const c = canvasRef.current; const a = document.createElement("a"); a.download = `collage_${Date.now()}.png`; a.href = c.toDataURL("image/png"); a.click(); };
   const clearAll = async () => { setLayers([]); setDrawingPaths([]); setSelectedLayerId(null); setShowWelcome(true); resetDream(); try { await window.storage.delete("collage:current"); } catch {} };
+
+  // ─── MAGIC WAND ───────────────────────────────────────────────────────────
+  const doWandSelect = useCallback((canvasX, canvasY) => {
+    const layer = layers.find(l => l.id === selectedLayerId);
+    if (!layer?.imageData) return;
+    const img = new Image();
+    img.onload = () => {
+      const lx = Math.floor((canvasX - layer.x) / layer.scaleX);
+      const ly = Math.floor((canvasY - layer.y) / layer.scaleY);
+      if (lx < 0 || lx >= img.width || ly < 0 || ly >= img.height) return;
+      const tc = document.createElement("canvas");
+      tc.width = img.width; tc.height = img.height;
+      const tCtx = tc.getContext("2d"); tCtx.drawImage(img, 0, 0);
+      const pixels = tCtx.getImageData(0, 0, img.width, img.height).data;
+      const mask = floodFill(pixels, img.width, img.height, lx, ly, wandTolerance);
+      setWandSelection({ mask, imgW: img.width, imgH: img.height, layerId: layer.id });
+    };
+    img.src = layer.imageData;
+  }, [layers, selectedLayerId, wandTolerance]);
+
+  const wandExtract = useCallback(() => {
+    if (!wandSelection) return;
+    const layer = layers.find(l => l.id === wandSelection.layerId);
+    if (!layer?.imageData) return;
+    const img = new Image();
+    img.onload = () => {
+      const tc = document.createElement("canvas");
+      tc.width = img.width; tc.height = img.height;
+      const tCtx = tc.getContext("2d"); tCtx.drawImage(img, 0, 0);
+      const imgData = tCtx.getImageData(0, 0, img.width, img.height);
+      for (let i = 0; i < wandSelection.mask.length; i++) {
+        if (!wandSelection.mask[i]) imgData.data[i*4+3] = 0;
+      }
+      tCtx.putImageData(imgData, 0, 0);
+      const nl = { id: uid(), name: layer.name + " (wand)", visible: true, opacity: 1, blendMode: "source-over",
+        x: layer.x, y: layer.y, scaleX: layer.scaleX, scaleY: layer.scaleY, rotation: layer.rotation,
+        imageData: tc.toDataURL(), clipPath: null, locked: false };
+      setLayers(prev => [nl, ...prev]); setSelectedLayerId(nl.id); setWandSelection(null);
+    };
+    img.src = layer.imageData;
+  }, [wandSelection, layers]);
+
+  const wandClip = useCallback(() => {
+    if (!wandSelection) return;
+    const { mask, imgW, imgH, layerId } = wandSelection;
+    const layer = layers.find(l => l.id === layerId);
+    if (!layer) return;
+    const pts = traceSelectionBoundary(mask, imgW, imgH, 4);
+    if (pts.length > 3) {
+      const scaled = pts.map(p => ({ x: layer.x + p.x * layer.scaleX, y: layer.y + p.y * layer.scaleY }));
+      updateLayer(layerId, { clipPath: scaled });
+    }
+    setWandSelection(null);
+  }, [wandSelection, layers, updateLayer]);
+
+  // ─── SAM SEGMENT ──────────────────────────────────────────────────────────
+  const loadSAM = useCallback(async () => {
+    if (samModelRef.current) return true;
+    setSamStatus("loading");
+    try {
+      const { SamModel, AutoProcessor } = await import('@xenova/transformers');
+      samModelRef.current = await SamModel.from_pretrained('Xenova/sam-vit-base');
+      samProcessorRef.current = await AutoProcessor.from_pretrained('Xenova/sam-vit-base');
+      setSamStatus("ready");
+      return true;
+    } catch (e) {
+      console.error("SAM load failed:", e);
+      setSamStatus("error");
+      return false;
+    }
+  }, []);
+
+  const samEmbedLayer = useCallback(async (layer) => {
+    if (!samModelRef.current || !samProcessorRef.current) return false;
+    if (samEmbedLayerIdRef.current === layer.id && samEmbeddingRef.current) return true;
+    setSamStatus("embedding");
+    try {
+      const { RawImage } = await import('@xenova/transformers');
+      const image = await RawImage.fromURL(layer.imageData);
+      const inputs = await samProcessorRef.current(image);
+      const { image_embeddings } = await samModelRef.current.get_image_embeddings(inputs);
+      samEmbeddingRef.current = { inputs, image_embeddings };
+      samEmbedLayerIdRef.current = layer.id;
+      setSamStatus("ready");
+      return true;
+    } catch (e) {
+      console.error("SAM embed failed:", e);
+      setSamStatus("error");
+      return false;
+    }
+  }, []);
+
+  const doSAMClick = useCallback(async (canvasX, canvasY) => {
+    const layer = layers.find(l => l.id === selectedLayerId);
+    if (!layer?.imageData) return;
+    const ok = await loadSAM();
+    if (!ok) return;
+    const embedded = await samEmbedLayer(layer);
+    if (!embedded) return;
+    setSamStatus("segmenting");
+    try {
+      const img = new Image(); img.src = layer.imageData;
+      await new Promise(r => { img.onload = r; img.onerror = r; });
+      const imgW = img.width, imgH = img.height;
+      const lx = Math.max(0, Math.min(imgW-1, (canvasX - layer.x) / layer.scaleX));
+      const ly = Math.max(0, Math.min(imgH-1, (canvasY - layer.y) / layer.scaleY));
+      const { inputs, image_embeddings } = samEmbeddingRef.current;
+      const [rh, rw] = inputs.reshaped_input_sizes[0];
+      const normPt = [[lx / imgW * rw, ly / imgH * rh]];
+      const maskInputs = { ...inputs, image_embeddings,
+        input_points: [[[normPt[0][0], normPt[0][1]]]],
+        input_labels: [[1]] };
+      const { pred_masks, iou_scores } = await samModelRef.current(maskInputs);
+      const masks = await samProcessorRef.current.post_process_masks(
+        pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes
+      );
+      // masks[0][0] is a flat boolean tensor; convert to Uint8Array
+      const rawMask = masks[0][0];
+      const flat = new Uint8Array(imgW * imgH);
+      const maskH = rawMask.dims[0], maskW = rawMask.dims[1];
+      const maskData = rawMask.data;
+      for (let y = 0; y < imgH; y++) {
+        for (let x = 0; x < imgW; x++) {
+          const my = Math.floor(y * maskH / imgH), mx = Math.floor(x * maskW / imgW);
+          flat[y * imgW + x] = maskData[my * maskW + mx] ? 1 : 0;
+        }
+      }
+      setSamMask(flat); setSamMaskDims({ w: imgW, h: imgH, layerId: layer.id });
+      setSamStatus("ready");
+    } catch (e) {
+      console.error("SAM segment failed:", e);
+      setSamStatus("error");
+    }
+  }, [layers, selectedLayerId, loadSAM, samEmbedLayer]);
+
+  const samExtract = useCallback(() => {
+    if (!samMask || !samMaskDims) return;
+    const layer = layers.find(l => l.id === samMaskDims.layerId);
+    if (!layer?.imageData) return;
+    const img = new Image();
+    img.onload = () => {
+      const tc = document.createElement("canvas");
+      tc.width = img.width; tc.height = img.height;
+      const tCtx = tc.getContext("2d"); tCtx.drawImage(img, 0, 0);
+      const imgData = tCtx.getImageData(0, 0, img.width, img.height);
+      for (let i = 0; i < samMask.length; i++) {
+        if (!samMask[i]) imgData.data[i*4+3] = 0;
+      }
+      tCtx.putImageData(imgData, 0, 0);
+      const nl = { id: uid(), name: layer.name + " (SAM)", visible: true, opacity: 1, blendMode: "source-over",
+        x: layer.x, y: layer.y, scaleX: layer.scaleX, scaleY: layer.scaleY, rotation: layer.rotation,
+        imageData: tc.toDataURL(), clipPath: null, locked: false };
+      setLayers(prev => [nl, ...prev]); setSelectedLayerId(nl.id);
+      setSamMask(null); setSamMaskDims(null);
+    };
+    img.src = layer.imageData;
+  }, [samMask, samMaskDims, layers]);
+
+  const samClip = useCallback(() => {
+    if (!samMask || !samMaskDims) return;
+    const { w, h, layerId } = samMaskDims;
+    const layer = layers.find(l => l.id === layerId);
+    if (!layer) return;
+    const pts = traceSelectionBoundary(samMask, w, h, 4);
+    if (pts.length > 3) {
+      const scaled = pts.map(p => ({ x: layer.x + p.x * layer.scaleX, y: layer.y + p.y * layer.scaleY }));
+      updateLayer(layerId, { clipPath: scaled });
+    }
+    setSamMask(null); setSamMaskDims(null);
+  }, [samMask, samMaskDims, layers, updateLayer]);
+
+  // Export edge/depth/normal map of selected layer as PNG (ControlNet conditioning)
+  const exportControlMap = useCallback((mapType) => {
+    const layer = layers.find(l => l.id === selectedLayerId);
+    if (!layer?.imageData) return;
+    const img = new Image();
+    img.onload = () => {
+      const tc = document.createElement("canvas");
+      tc.width = img.width; tc.height = img.height;
+      const tCtx = tc.getContext("2d"); tCtx.drawImage(img, 0, 0);
+      if (mapType === "edge") applyEdge(tCtx, 0, 0, img.width, img.height);
+      else if (mapType === "normal") applyEmboss(tCtx, 0, 0, img.width, img.height);
+      else if (mapType === "depth") applyDepth(tCtx, 0, 0, img.width, img.height);
+      const a = document.createElement("a");
+      a.download = `${mapType}_map_${Date.now()}.png`;
+      a.href = tc.toDataURL("image/png"); a.click();
+    };
+    img.src = layer.imageData;
+  }, [layers, selectedLayerId]);
 
   // ─── STYLES ───
   const toolBtn = (t) => `px-3 py-2 text-xs font-bold tracking-wider uppercase transition-all duration-150 border ${
@@ -867,6 +1281,10 @@ export default function CollageWorkspace() {
             <button className={toolBtn(TOOLS.DRAW)} onClick={() => setTool(TOOLS.DRAW)}>Draw</button>
           </div>
           <button className={toolBtn(TOOLS.DREAM) + " w-full mt-1"} onClick={() => setTool(TOOLS.DREAM)}>◎ Dream</button>
+          <div className="grid grid-cols-2 gap-1 mt-1">
+            <button className={toolBtn(TOOLS.WAND)} onClick={() => setTool(TOOLS.WAND)} title="Magic Wand: click to flood-fill select">⬡ Wand</button>
+            <button className={toolBtn(TOOLS.SEGMENT)} onClick={() => { setTool(TOOLS.SEGMENT); loadSAM(); }} title="SAM AI: click to segment objects">◈ Segment</button>
+          </div>
         </div>
 
         {tool === TOOLS.DRAW && (
@@ -885,6 +1303,95 @@ export default function CollageWorkspace() {
             <p className="text-xs text-zinc-500 leading-relaxed">Draw around a region on the selected layer to clip it.</p>
             {layers.find(l => l.id === selectedLayerId)?.clipPath && (
               <button onClick={clearClip} className="mt-2 text-xs text-pink-400 hover:text-pink-300 underline">Remove clip</button>
+            )}
+          </div>
+        )}
+
+        {/* ═══ MAGIC WAND PANEL ═══ */}
+        {tool === TOOLS.WAND && (
+          <div className="p-3 border-b border-zinc-800 space-y-3">
+            <p className="text-xs text-zinc-400 uppercase tracking-widest font-bold">⬡ Magic Wand</p>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-500 w-16">tolerance</span>
+              <input type="range" min="1" max="120" value={wandTolerance} onChange={e => setWandTolerance(+e.target.value)} className="flex-1 accent-pink-500" />
+              <span className="text-xs text-zinc-500 w-8">{wandTolerance}</span>
+            </div>
+            <div className="bg-zinc-900 border border-zinc-800 p-2">
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                {selectedLayerId ? "Click on a layer to flood-fill select by color." : "Select a layer first."}
+              </p>
+            </div>
+            {wandSelection && (
+              <div className="space-y-1">
+                <p className="text-xs text-pink-400 font-mono">Selection active</p>
+                <div className="grid grid-cols-2 gap-1">
+                  <button onClick={wandExtract} className="py-1.5 text-xs bg-pink-500/20 border border-pink-500/50 text-pink-300 hover:bg-pink-500/30 transition-all">Extract layer</button>
+                  <button onClick={wandClip} className="py-1.5 text-xs bg-zinc-800 border border-zinc-700 text-zinc-300 hover:border-pink-500/50 hover:text-pink-300 transition-all">Set clip</button>
+                </div>
+                <button onClick={() => setWandSelection(null)} className="w-full py-1 text-xs text-zinc-600 hover:text-zinc-400">Clear selection</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══ SAM SEGMENT PANEL ═══ */}
+        {tool === TOOLS.SEGMENT && (
+          <div className="p-3 border-b border-zinc-800 space-y-3">
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${samStatus === "ready" ? "bg-purple-400" : samStatus === "error" ? "bg-red-400" : "bg-amber-400 animate-pulse"}`} />
+              <p className="text-xs text-purple-400 uppercase tracking-widest font-bold">◈ SAM Segment</p>
+            </div>
+            <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
+              <div className="flex justify-between">
+                <span className="text-xs text-zinc-500">Model</span>
+                <span className="text-xs text-zinc-400 font-mono">sam-vit-base</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-xs text-zinc-500">Status</span>
+                <span className={`text-xs font-mono ${
+                  samStatus === "ready" ? "text-purple-400" :
+                  samStatus === "error" ? "text-red-400" :
+                  samStatus === "idle" ? "text-zinc-600" : "text-amber-400"}`}>
+                  {samStatus === "idle" ? "not loaded" :
+                   samStatus === "loading" ? "downloading model..." :
+                   samStatus === "embedding" ? "encoding image..." :
+                   samStatus === "segmenting" ? "segmenting..." :
+                   samStatus === "error" ? "error — retry?" : "● ready"}
+                </span>
+              </div>
+            </div>
+            {samStatus === "idle" && (
+              <button onClick={loadSAM} className="w-full py-2 text-xs border border-purple-500/40 text-purple-400 hover:bg-purple-500/10 transition-all">
+                Load SAM model (~100MB)
+              </button>
+            )}
+            {(samStatus === "loading" || samStatus === "embedding" || samStatus === "segmenting") && (
+              <div className="w-full py-2 text-xs text-center text-amber-400 border border-amber-800/50 animate-pulse">
+                {samStatus === "loading" ? "Downloading model..." :
+                 samStatus === "embedding" ? "Encoding image..." : "Segmenting..."}
+              </div>
+            )}
+            {samStatus === "ready" && !samMask && (
+              <div className="bg-zinc-900 border border-zinc-800 p-2">
+                <p className="text-xs text-zinc-500 leading-relaxed">
+                  {selectedLayerId ? "Click anywhere on the image to segment an object." : "Select a layer first."}
+                </p>
+              </div>
+            )}
+            {samStatus === "error" && (
+              <button onClick={() => { setSamStatus("idle"); samModelRef.current = null; }} className="w-full py-1.5 text-xs border border-red-700 text-red-400 hover:bg-red-900/20">
+                Reset &amp; retry
+              </button>
+            )}
+            {samMask && samMaskDims && (
+              <div className="space-y-1">
+                <p className="text-xs text-purple-400 font-mono">Mask ready</p>
+                <div className="grid grid-cols-2 gap-1">
+                  <button onClick={samExtract} className="py-1.5 text-xs bg-purple-500/20 border border-purple-500/50 text-purple-300 hover:bg-purple-500/30 transition-all">Extract layer</button>
+                  <button onClick={samClip} className="py-1.5 text-xs bg-zinc-800 border border-zinc-700 text-zinc-300 hover:border-purple-500/50 hover:text-purple-300 transition-all">Set clip</button>
+                </div>
+                <button onClick={() => { setSamMask(null); setSamMaskDims(null); }} className="w-full py-1 text-xs text-zinc-600 hover:text-zinc-400">Clear mask</button>
+              </div>
             )}
           </div>
         )}
@@ -1031,11 +1538,28 @@ export default function CollageWorkspace() {
           <button onClick={() => setShowEffects(!showEffects)} className="flex items-center justify-between w-full text-xs text-zinc-600 uppercase tracking-widest">
             <span>Effects</span><span className="text-pink-400">{showEffects ? "−" : "+"}</span></button>
           {showEffects && (
-            <div className="mt-2 grid grid-cols-2 gap-1">
-              {["dither","pixelsort","invert","posterize","chromatic","glitch","threshold","halftone"].map(f => (
-                <button key={f} onClick={() => applyEffect(f)} disabled={!selectedLayerId}
-                  className={fxBtn + (selectedLayerId ? "" : " opacity-30 cursor-not-allowed")}>{f}</button>
-              ))}
+            <div className="mt-2 space-y-2">
+              <div className="grid grid-cols-2 gap-1">
+                {["dither","pixelsort","invert","posterize","chromatic","glitch","threshold","halftone"].map(f => (
+                  <button key={f} onClick={() => applyEffect(f)} disabled={!selectedLayerId}
+                    className={fxBtn + (selectedLayerId ? "" : " opacity-30 cursor-not-allowed")}>{f}</button>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-700 uppercase tracking-widest pt-1">ControlNet Maps</p>
+              <div className="grid grid-cols-3 gap-1">
+                {["blur","edge","emboss","depth"].map(f => (
+                  <button key={f} onClick={() => applyEffect(f)} disabled={!selectedLayerId}
+                    className={fxBtn + " text-cyan-400/80 hover:text-cyan-300 hover:border-cyan-500/50" + (selectedLayerId ? "" : " opacity-30 cursor-not-allowed")}>{f}</button>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-700 uppercase tracking-widest pt-1">Export Map</p>
+              <div className="grid grid-cols-3 gap-1">
+                {[["edge","Canny"],["emboss","Normal"],["depth","Depth"]].map(([t,l]) => (
+                  <button key={t} onClick={() => exportControlMap(t)} disabled={!selectedLayerId}
+                    className={"px-2 py-1.5 text-xs font-mono bg-zinc-800 border border-cyan-900 text-cyan-600 hover:bg-cyan-500/10 hover:border-cyan-500/50 hover:text-cyan-300 transition-all" + (selectedLayerId ? "" : " opacity-30 cursor-not-allowed")}>↓{l}</button>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-700 leading-relaxed">Edge/Normal/Depth maps are ControlNet conditioning inputs.</p>
             </div>
           )}
         </div>
@@ -1051,7 +1575,7 @@ export default function CollageWorkspace() {
       <div ref={containerRef} className="flex-1 overflow-hidden relative bg-zinc-900"
         onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
         onDrop={e => { e.preventDefault(); e.stopPropagation(); if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); }}
-        style={{ cursor: tool === TOOLS.PAN ? "grab" : tool === TOOLS.DREAM ? (dreamActive ? "cell" : "crosshair") : (tool === TOOLS.LASSO || tool === TOOLS.DRAW) ? "crosshair" : "default" }}>
+        style={{ cursor: tool === TOOLS.PAN ? "grab" : tool === TOOLS.DREAM ? (dreamActive ? "cell" : "crosshair") : (tool === TOOLS.LASSO || tool === TOOLS.DRAW || tool === TOOLS.WAND || tool === TOOLS.SEGMENT) ? "crosshair" : "default" }}>
         <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
           <button onClick={() => setZoom(z => Math.max(0.1, z * 0.8))} className="w-7 h-7 text-xs bg-zinc-800/80 border border-zinc-700 text-zinc-400 hover:text-white">−</button>
           <span className="text-xs text-zinc-500 font-mono w-12 text-center">{Math.round(zoom * 100)}%</span>
