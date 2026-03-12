@@ -1,4 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { ComfyUIClient } from './comfyui-client.js';
+import sd15Inpaint from '../comfyui-workflows/sd15-inpaint.json';
+import sdxlInpaint from '../comfyui-workflows/sdxl-inpaint-8gb.json';
+
+const SAM2_URL = "http://127.0.0.1:7861";
+
+const COMFY_WORKFLOWS = {
+  "sd15-inpaint":    { label: "SD 1.5 Inpaint (4GB)",  template: sd15Inpaint },
+  "sdxl-inpaint-8g": { label: "SDXL Inpaint (8GB)",    template: sdxlInpaint },
+};
 
 // ═══════════════════════════════════════════════════════════════
 // TOOLS & CONSTANTS
@@ -11,7 +21,8 @@ const TOOLS = {
   PAN: "pan",
   DREAM: "dream",
   WAND: "wand",       // Magic Wand flood-fill selection
-  SEGMENT: "segment", // SAM AI object segmentation
+  SEGMENT: "segment", // SAM2 AI object segmentation
+  REGION: "region",   // Polygonal region for ComfyUI inpainting
 };
 
 const BLEND_MODES = [
@@ -65,6 +76,100 @@ const RD_COLORMAPS = {
     return [r, g, b];
   },
 };
+
+// ═══════════════════════════════════════════════════════════════
+// INPAINT HELPERS  (polygon region + mask generation)
+// ═══════════════════════════════════════════════════════════════
+
+/** Bounding box of an array of {x,y} canvas points. */
+function polyBounds(points) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Bounding box of a SAM boolean mask in canvas coordinates.
+ * Returns null if mask is empty.
+ */
+function samMaskBounds(mask, maskW, maskH, layerX, layerY, scaleX, scaleY) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let y = 0; y < maskH; y++) {
+    for (let x = 0; x < maskW; x++) {
+      if (!mask[y * maskW + x]) continue;
+      const cx = layerX + x * scaleX, cy = layerY + y * scaleY;
+      if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+      if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+    }
+  }
+  if (minX === Infinity) return null;
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Crop a layer's imageData to a rect (image-space coords).
+ * Returns a Promise<dataUrl>.
+ */
+function cropLayerImage(layer, cropX, cropY, cropW, cropH) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.src = layer.imageData;
+    img.onload = () => {
+      const tc = document.createElement("canvas");
+      tc.width = cropW; tc.height = cropH;
+      tc.getContext("2d").drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+      resolve(tc.toDataURL("image/png"));
+    };
+  });
+}
+
+/**
+ * Build a white-on-black mask PNG (same size as the crop) from polygon points.
+ * All coordinates are canvas-space; function converts to cropped image-space.
+ */
+function polygonMaskDataUrl(points, layerX, layerY, scaleX, scaleY, cropX, cropY, cropW, cropH) {
+  const mc = document.createElement("canvas");
+  mc.width = cropW; mc.height = cropH;
+  const ctx = mc.getContext("2d");
+  ctx.fillStyle = "black";
+  ctx.fillRect(0, 0, cropW, cropH);
+  // Canvas → layer image → cropped image coords
+  const local = points.map(p => ({
+    x: (p.x - layerX) / scaleX - cropX,
+    y: (p.y - layerY) / scaleY - cropY,
+  }));
+  ctx.fillStyle = "white";
+  ctx.beginPath();
+  ctx.moveTo(local[0].x, local[0].y);
+  for (let i = 1; i < local.length; i++) ctx.lineTo(local[i].x, local[i].y);
+  ctx.closePath();
+  ctx.fill();
+  return mc.toDataURL("image/png");
+}
+
+/**
+ * Build a white-on-black mask PNG from a SAM boolean mask, cropped to a rect.
+ */
+function samMaskCroppedDataUrl(samMask, maskW, cropX, cropY, cropW, cropH) {
+  const mc = document.createElement("canvas");
+  mc.width = cropW; mc.height = cropH;
+  const ctx = mc.getContext("2d");
+  const id = ctx.createImageData(cropW, cropH);
+  for (let y = 0; y < cropH; y++) {
+    for (let x = 0; x < cropW; x++) {
+      const srcIdx = (y + cropY) * maskW + (x + cropX);
+      const v = samMask[srcIdx] ? 255 : 0;
+      const dst = (y * cropW + x) * 4;
+      id.data[dst] = id.data[dst + 1] = id.data[dst + 2] = v;
+      id.data[dst + 3] = 255;
+    }
+  }
+  ctx.putImageData(id, 0, 0);
+  return mc.toDataURL("image/png");
+}
 
 // ═══════════════════════════════════════════════════════════════
 // REACTION-DIFFUSION ENGINE (Gray-Scott model)
@@ -524,15 +629,34 @@ export default function CollageWorkspace() {
   const [wandSelection, setWandSelection] = useState(null); // { mask, imgW, imgH, layerId }
   const wandMaskCanvasRef = useRef(null); // offscreen canvas for wand overlay
 
-  // SAM Segment
+  // SAM2 / SAM Segment
   const [samStatus, setSamStatus] = useState("idle"); // idle | loading | embedding | ready | segmenting | error
   const [samMask, setSamMask] = useState(null); // Uint8Array boolean mask
   const [samMaskDims, setSamMaskDims] = useState(null); // { w, h, layerId }
-  const samModelRef = useRef(null);
-  const samProcessorRef = useRef(null);
-  const samEmbeddingRef = useRef(null); // cached embedding
-  const samEmbedLayerIdRef = useRef(null); // which layer was embedded
-  const samMaskCanvasRef = useRef(null); // offscreen canvas for SAM mask overlay
+  const [sam2Available, setSam2Available] = useState(false); // SAM2 CUDA server running
+  const samModelRef = useRef(null);         // browser SAM fallback model
+  const samProcessorRef = useRef(null);     // browser SAM fallback processor
+  const samEmbeddingRef = useRef(null);     // browser SAM cached embedding
+  const samEmbedLayerIdRef = useRef(null);  // browser SAM: which layer was embedded
+  const sam2SessionRef = useRef(null);      // SAM2 server: { sessionId, layerId }
+  const samMaskCanvasRef = useRef(null);    // offscreen canvas for SAM mask overlay
+
+  // Polygon Region tool (for ComfyUI inpainting)
+  const [regionPoints, setRegionPoints] = useState([]);    // [{x,y}] canvas coords
+  const [regionClosed, setRegionClosed] = useState(false);
+  const [regionMousePos, setRegionMousePos] = useState(null); // live cursor while drawing
+  const lastRegionClickRef = useRef(0); // ms timestamp of last click (double-click detect)
+
+  // ComfyUI inpaint panel
+  const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188");
+  const [comfyWorkflow, setComfyWorkflow] = useState("sd15-inpaint");
+  const [comfyPrompt, setComfyPrompt] = useState("");
+  const [comfyNegPrompt, setComfyNegPrompt] = useState("blurry, low quality, watermark");
+  const [comfyDenoise, setComfyDenoise] = useState(0.75);
+  const [comfySteps, setComfySteps] = useState(25);
+  const [comfyStatus, setComfyStatus] = useState("idle"); // idle | running | done | error:...
+  const [comfyResult, setComfyResult] = useState(null);           // base64 result image
+  const [comfyResultBounds, setComfyResultBounds] = useState(null); // {x,y,scaleX,scaleY}
 
   // Load state
   useEffect(() => {
@@ -620,10 +744,32 @@ export default function CollageWorkspace() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && e.shiftKey) { e.preventDefault(); redo(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); redo(); }
+      if (e.key === 'Escape') {
+        if (regionPoints.length > 0) clearRegion();
+      }
+      if (e.key === 'Enter' && tool === TOOLS.REGION && !regionClosed && regionPoints.length >= 3) {
+        setRegionClosed(true);
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [undo, redo]);
+  }, [undo, redo, regionPoints, clearRegion, tool, regionClosed]);
+
+  // ─── SAM2 server health check ───
+  // Runs whenever the user switches to SEGMENT tool
+  useEffect(() => {
+    if (tool !== TOOLS.SEGMENT && tool !== TOOLS.REGION) return;
+    (async () => {
+      try {
+        const r = await fetch(`${SAM2_URL}/health`, { signal: AbortSignal.timeout(1200) });
+        if (!r.ok) { setSam2Available(false); return; }
+        const data = await r.json();
+        setSam2Available(data.ok === true);
+      } catch {
+        setSam2Available(false);
+      }
+    })();
+  }, [tool]);
 
   // ─── RENDER ───
   const render = useCallback(() => {
@@ -765,7 +911,35 @@ export default function CollageWorkspace() {
         ctx.restore();
       }
     }
-  }, [layers, selectedLayerId, tool, drawingPaths, isLassoing, lassoPoints, dreamActive, dreamRegion, dreamPaintPoints, wandSelection, samMask, samMaskDims]);
+    // Region polygon overlay
+    if (tool === TOOLS.REGION && regionPoints.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = "#f97316"; // orange
+      ctx.fillStyle = "rgba(249,115,22,0.12)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash(regionClosed ? [] : [5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(regionPoints[0].x, regionPoints[0].y);
+      for (let i = 1; i < regionPoints.length; i++) ctx.lineTo(regionPoints[i].x, regionPoints[i].y);
+      if (regionClosed) {
+        ctx.closePath();
+        ctx.fill();
+      } else if (regionMousePos) {
+        ctx.lineTo(regionMousePos.x, regionMousePos.y);
+      }
+      ctx.stroke();
+      // Vertex dots
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#f97316";
+      for (let i = 0; i < regionPoints.length; i++) {
+        const isFirst = i === 0;
+        ctx.beginPath();
+        ctx.arc(regionPoints[i].x, regionPoints[i].y, isFirst ? 6 : 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }, [layers, selectedLayerId, tool, drawingPaths, isLassoing, lassoPoints, dreamActive, dreamRegion, dreamPaintPoints, wandSelection, samMask, samMaskDims, regionPoints, regionClosed, regionMousePos]);
 
   useEffect(() => {
     const loads = layers.filter(l => l.imageData).map(l =>
@@ -971,6 +1145,23 @@ export default function CollageWorkspace() {
     if (tool === TOOLS.DRAW) { setCurrentPath({ points: [pos], color: brushColor, size: brushSize }); return; }
     if (tool === TOOLS.WAND) { doWandSelect(pos.x, pos.y); return; }
     if (tool === TOOLS.SEGMENT) { doSAMClick(pos.x, pos.y); return; }
+    if (tool === TOOLS.REGION && !regionClosed) {
+      const now = Date.now();
+      // Double-click within 300ms → close polygon
+      if (now - lastRegionClickRef.current < 300 && regionPoints.length >= 3) {
+        setRegionClosed(true); return;
+      }
+      lastRegionClickRef.current = now;
+      // Click near first point → close polygon
+      if (regionPoints.length >= 3) {
+        const first = regionPoints[0];
+        if (Math.hypot(pos.x - first.x, pos.y - first.y) < 14 / zoom) {
+          setRegionClosed(true); return;
+        }
+      }
+      setRegionPoints(prev => [...prev, pos]);
+      return;
+    }
     if (tool === TOOLS.SELECT) {
       for (const layer of layers) {
         if (!layer.visible || layer.locked || !layer.imageData) continue;
@@ -995,6 +1186,7 @@ export default function CollageWorkspace() {
     if (tool === TOOLS.DREAM && isDreamPainting) { setDreamPaintPoints(prev => [...prev, pos]); return; }
     if (tool === TOOLS.LASSO && isLassoing) { setLassoPoints(prev => [...prev, pos]); return; }
     if (tool === TOOLS.DRAW && currentPath) { setCurrentPath(prev => ({ ...prev, points: [...prev.points, pos] })); return; }
+    if (tool === TOOLS.REGION && !regionClosed) { setRegionMousePos(pos); return; }
     if (tool === TOOLS.SELECT && isDragging && selectedLayerId && dragStart) {
       setLayers(prev => prev.map(l => l.id !== selectedLayerId || l.locked ? l : { ...l, x: pos.x - dragStart.x, y: pos.y - dragStart.y }));
     }
@@ -1119,8 +1311,14 @@ export default function CollageWorkspace() {
     setWandSelection(null);
   }, [wandSelection, layers, updateLayer]);
 
-  // ─── SAM SEGMENT ──────────────────────────────────────────────────────────
+  // ─── SAM2 / SAM SEGMENT ───────────────────────────────────────────────────
+  /**
+   * Prepare for segmentation.
+   * Prefers the local SAM2 CUDA server; falls back to browser SAM (@xenova/transformers).
+   */
   const loadSAM = useCallback(async () => {
+    if (sam2Available) { setSamStatus("ready"); return true; }
+    // Browser SAM fallback
     if (samModelRef.current) return true;
     setSamStatus("loading");
     try {
@@ -1134,9 +1332,31 @@ export default function CollageWorkspace() {
       setSamStatus("error");
       return false;
     }
-  }, []);
+  }, [sam2Available]);
 
   const samEmbedLayer = useCallback(async (layer) => {
+    // ── SAM2 server ──────────────────────────────────────────────────────────
+    if (sam2Available) {
+      if (sam2SessionRef.current?.layerId === layer.id) return true;
+      setSamStatus("embedding");
+      try {
+        const r = await fetch(`${SAM2_URL}/embed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: layer.imageData }),
+        });
+        if (!r.ok) throw new Error(`SAM2 /embed ${r.status}`);
+        const { session_id } = await r.json();
+        sam2SessionRef.current = { sessionId: session_id, layerId: layer.id };
+        setSamStatus("ready");
+        return true;
+      } catch (e) {
+        console.error("SAM2 embed failed:", e);
+        setSamStatus("error");
+        return false;
+      }
+    }
+    // ── Browser SAM fallback ─────────────────────────────────────────────────
     if (!samModelRef.current || !samProcessorRef.current) return false;
     if (samEmbedLayerIdRef.current === layer.id && samEmbeddingRef.current) return true;
     setSamStatus("embedding");
@@ -1154,7 +1374,7 @@ export default function CollageWorkspace() {
       setSamStatus("error");
       return false;
     }
-  }, []);
+  }, [sam2Available]);
 
   const doSAMClick = useCallback(async (canvasX, canvasY) => {
     const layer = layers.find(l => l.id === selectedLayerId);
@@ -1164,23 +1384,60 @@ export default function CollageWorkspace() {
     const embedded = await samEmbedLayer(layer);
     if (!embedded) return;
     setSamStatus("segmenting");
+
+    const img = new Image(); img.src = layer.imageData;
+    await new Promise(r => { img.onload = r; img.onerror = r; });
+    const imgW = img.width, imgH = img.height;
+    const lx = Math.max(0, Math.min(imgW - 1, (canvasX - layer.x) / layer.scaleX));
+    const ly = Math.max(0, Math.min(imgH - 1, (canvasY - layer.y) / layer.scaleY));
+
+    // ── SAM2 server path ─────────────────────────────────────────────────────
+    if (sam2Available) {
+      try {
+        const r = await fetch(`${SAM2_URL}/predict`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sam2SessionRef.current.sessionId,
+            point_x: lx,
+            point_y: ly,
+            label: 1,
+          }),
+        });
+        if (!r.ok) throw new Error(`SAM2 /predict ${r.status}`);
+        const { mask: maskDataUrl, width, height } = await r.json();
+        // Decode white-on-black PNG → flat Uint8Array
+        const maskImg = new Image(); maskImg.src = maskDataUrl;
+        await new Promise(res => { maskImg.onload = res; });
+        const mc = document.createElement("canvas");
+        mc.width = width; mc.height = height;
+        const mCtx = mc.getContext("2d"); mCtx.drawImage(maskImg, 0, 0);
+        const px = mCtx.getImageData(0, 0, width, height).data;
+        const flat = new Uint8Array(width * height);
+        for (let i = 0; i < flat.length; i++) flat[i] = px[i * 4] > 127 ? 1 : 0;
+        setSamMask(flat);
+        setSamMaskDims({ w: width, h: height, layerId: layer.id });
+        setSamStatus("ready");
+      } catch (e) {
+        console.error("SAM2 predict failed:", e);
+        setSamStatus("error");
+      }
+      return;
+    }
+
+    // ── Browser SAM fallback ─────────────────────────────────────────────────
     try {
-      const img = new Image(); img.src = layer.imageData;
-      await new Promise(r => { img.onload = r; img.onerror = r; });
-      const imgW = img.width, imgH = img.height;
-      const lx = Math.max(0, Math.min(imgW-1, (canvasX - layer.x) / layer.scaleX));
-      const ly = Math.max(0, Math.min(imgH-1, (canvasY - layer.y) / layer.scaleY));
       const { inputs, image_embeddings } = samEmbeddingRef.current;
       const [rh, rw] = inputs.reshaped_input_sizes[0];
-      const normPt = [[lx / imgW * rw, ly / imgH * rh]];
-      const maskInputs = { ...inputs, image_embeddings,
-        input_points: [[[normPt[0][0], normPt[0][1]]]],
-        input_labels: [[1]] };
-      const { pred_masks, iou_scores } = await samModelRef.current(maskInputs);
+      const maskInputs = {
+        ...inputs, image_embeddings,
+        input_points: [[[lx / imgW * rw, ly / imgH * rh]]],
+        input_labels: [[1]],
+      };
+      const { pred_masks } = await samModelRef.current(maskInputs);
       const masks = await samProcessorRef.current.post_process_masks(
         pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes
       );
-      // masks[0][0] is a flat boolean tensor; convert to Uint8Array
       const rawMask = masks[0][0];
       const flat = new Uint8Array(imgW * imgH);
       const maskH = rawMask.dims[0], maskW = rawMask.dims[1];
@@ -1197,7 +1454,7 @@ export default function CollageWorkspace() {
       console.error("SAM segment failed:", e);
       setSamStatus("error");
     }
-  }, [layers, selectedLayerId, loadSAM, samEmbedLayer]);
+  }, [layers, selectedLayerId, loadSAM, samEmbedLayer, sam2Available]);
 
   const samExtract = useCallback(() => {
     if (!samMask || !samMaskDims) return;
@@ -1234,6 +1491,112 @@ export default function CollageWorkspace() {
     }
     setSamMask(null); setSamMaskDims(null);
   }, [samMask, samMaskDims, layers, updateLayer]);
+
+  // ─── REGION TOOL ─────────────────────────────────────────────────────────
+  const clearRegion = useCallback(() => {
+    setRegionPoints([]); setRegionClosed(false); setRegionMousePos(null);
+    lastRegionClickRef.current = 0;
+  }, []);
+
+  // ─── COMFYUI INPAINT ──────────────────────────────────────────────────────
+  /**
+   * Crop the selected layer (or SAM mask's layer) to the active region
+   * (polygon or SAM mask), build a matching mask, send both to ComfyUI,
+   * and store the result ready to be accepted as a new layer.
+   */
+  const runComfyInpaint = useCallback(async () => {
+    const PAD = 32; // px padding around the region in image-space
+
+    let srcLayer = layers.find(l => l.id === selectedLayerId);
+    if (!srcLayer?.imageData) return;
+
+    setComfyStatus("running");
+    try {
+      const img = await new Promise(res => {
+        const i = new Image(); i.onload = () => res(i); i.src = srcLayer.imageData;
+      });
+
+      let cropX, cropY, cropW, cropH, imageDataUrl, maskDataUrl, placementX, placementY;
+
+      if (regionClosed && regionPoints.length >= 3) {
+        // ── Polygon region path ───────────────────────────────────────────
+        const b = polyBounds(regionPoints);
+        cropX = Math.max(0, Math.floor((b.minX - srcLayer.x) / srcLayer.scaleX) - PAD);
+        cropY = Math.max(0, Math.floor((b.minY - srcLayer.y) / srcLayer.scaleY) - PAD);
+        const x1 = Math.min(img.width,  Math.ceil((b.maxX - srcLayer.x) / srcLayer.scaleX) + PAD);
+        const y1 = Math.min(img.height, Math.ceil((b.maxY - srcLayer.y) / srcLayer.scaleY) + PAD);
+        cropW = x1 - cropX; cropH = y1 - cropY;
+        imageDataUrl = await cropLayerImage(srcLayer, cropX, cropY, cropW, cropH);
+        maskDataUrl  = polygonMaskDataUrl(
+          regionPoints, srcLayer.x, srcLayer.y, srcLayer.scaleX, srcLayer.scaleY,
+          cropX, cropY, cropW, cropH
+        );
+        placementX = srcLayer.x + cropX * srcLayer.scaleX;
+        placementY = srcLayer.y + cropY * srcLayer.scaleY;
+
+      } else if (samMask && samMaskDims) {
+        // ── SAM mask path ─────────────────────────────────────────────────
+        srcLayer = layers.find(l => l.id === samMaskDims.layerId) || srcLayer;
+        const samImg = await new Promise(res => {
+          const i = new Image(); i.onload = () => res(i); i.src = srcLayer.imageData;
+        });
+        const b = samMaskBounds(samMask, samMaskDims.w, samMaskDims.h,
+          srcLayer.x, srcLayer.y, srcLayer.scaleX, srcLayer.scaleY);
+        if (!b) { setComfyStatus("idle"); return; }
+        cropX = Math.max(0, Math.floor((b.minX - srcLayer.x) / srcLayer.scaleX) - PAD);
+        cropY = Math.max(0, Math.floor((b.minY - srcLayer.y) / srcLayer.scaleY) - PAD);
+        const x1 = Math.min(samImg.width,  Math.ceil((b.maxX - srcLayer.x) / srcLayer.scaleX) + PAD);
+        const y1 = Math.min(samImg.height, Math.ceil((b.maxY - srcLayer.y) / srcLayer.scaleY) + PAD);
+        cropW = x1 - cropX; cropH = y1 - cropY;
+        imageDataUrl = await cropLayerImage(srcLayer, cropX, cropY, cropW, cropH);
+        maskDataUrl  = samMaskCroppedDataUrl(samMask, samMaskDims.w, cropX, cropY, cropW, cropH);
+        placementX = srcLayer.x + cropX * srcLayer.scaleX;
+        placementY = srcLayer.y + cropY * srcLayer.scaleY;
+
+      } else {
+        setComfyStatus("idle");
+        return;
+      }
+
+      const client = new ComfyUIClient(comfyUrl);
+      const workflowTemplate = COMFY_WORKFLOWS[comfyWorkflow]?.template;
+      if (!workflowTemplate) throw new Error("Unknown workflow");
+
+      const resultDataUrl = await client.runInpaint({
+        imageDataUrl,
+        maskDataUrl,
+        workflowTemplate,
+        positivePrompt:  comfyPrompt,
+        negativePrompt:  comfyNegPrompt,
+        denoise:  comfyDenoise,
+        steps:    comfySteps,
+        cfg:      7,
+        onStatus: setComfyStatus,
+      });
+
+      setComfyResult(resultDataUrl);
+      setComfyResultBounds({ x: placementX, y: placementY, scaleX: srcLayer.scaleX, scaleY: srcLayer.scaleY });
+      setComfyStatus("done");
+    } catch (e) {
+      console.error("ComfyUI inpaint failed:", e);
+      setComfyStatus("error: " + e.message);
+    }
+  }, [layers, selectedLayerId, regionClosed, regionPoints, samMask, samMaskDims,
+      comfyUrl, comfyWorkflow, comfyPrompt, comfyNegPrompt, comfyDenoise, comfySteps]);
+
+  const acceptComfyResult = useCallback(() => {
+    if (!comfyResult || !comfyResultBounds) return;
+    const nl = {
+      id: uid(), name: "AI Inpaint", visible: true, locked: false, opacity: 1,
+      blendMode: "source-over", x: comfyResultBounds.x, y: comfyResultBounds.y,
+      scaleX: comfyResultBounds.scaleX, scaleY: comfyResultBounds.scaleY,
+      rotation: 0, imageData: comfyResult, clipPath: null,
+    };
+    setLayers(prev => [nl, ...prev]);
+    setSelectedLayerId(nl.id);
+    setComfyResult(null); setComfyResultBounds(null); setComfyStatus("idle");
+    clearRegion();
+  }, [comfyResult, comfyResultBounds, clearRegion]);
 
   // Export edge/depth/normal map of selected layer as PNG (ControlNet conditioning)
   const exportControlMap = useCallback((mapType) => {
@@ -1283,8 +1646,9 @@ export default function CollageWorkspace() {
           <button className={toolBtn(TOOLS.DREAM) + " w-full mt-1"} onClick={() => setTool(TOOLS.DREAM)}>◎ Dream</button>
           <div className="grid grid-cols-2 gap-1 mt-1">
             <button className={toolBtn(TOOLS.WAND)} onClick={() => setTool(TOOLS.WAND)} title="Magic Wand: click to flood-fill select">⬡ Wand</button>
-            <button className={toolBtn(TOOLS.SEGMENT)} onClick={() => { setTool(TOOLS.SEGMENT); loadSAM(); }} title="SAM AI: click to segment objects">◈ Segment</button>
+            <button className={toolBtn(TOOLS.SEGMENT)} onClick={() => { setTool(TOOLS.SEGMENT); loadSAM(); }} title="SAM2: click to segment objects">◈ Segment</button>
           </div>
+          <button className={toolBtn(TOOLS.REGION) + " w-full mt-1"} onClick={() => { setTool(TOOLS.REGION); clearRegion(); }} title="Region: paint polygon for AI inpainting">⬟ Region AI</button>
         </div>
 
         {tool === TOOLS.DRAW && (
@@ -1334,17 +1698,25 @@ export default function CollageWorkspace() {
           </div>
         )}
 
-        {/* ═══ SAM SEGMENT PANEL ═══ */}
+        {/* ═══ SAM2 SEGMENT PANEL ═══ */}
         {tool === TOOLS.SEGMENT && (
           <div className="p-3 border-b border-zinc-800 space-y-3">
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${samStatus === "ready" ? "bg-purple-400" : samStatus === "error" ? "bg-red-400" : "bg-amber-400 animate-pulse"}`} />
-              <p className="text-xs text-purple-400 uppercase tracking-widest font-bold">◈ SAM Segment</p>
+              <p className="text-xs text-purple-400 uppercase tracking-widest font-bold">◈ Segment</p>
             </div>
             <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
               <div className="flex justify-between">
+                <span className="text-xs text-zinc-500">Backend</span>
+                <span className={`text-xs font-mono ${sam2Available ? "text-green-400" : "text-zinc-500"}`}>
+                  {sam2Available ? "● SAM2 CUDA" : "○ SAM browser"}
+                </span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-xs text-zinc-500">Model</span>
-                <span className="text-xs text-zinc-400 font-mono">sam-vit-base</span>
+                <span className="text-xs text-zinc-400 font-mono">
+                  {sam2Available ? "sam2.1-small" : "sam-vit-base"}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-xs text-zinc-500">Status</span>
@@ -1353,17 +1725,22 @@ export default function CollageWorkspace() {
                   samStatus === "error" ? "text-red-400" :
                   samStatus === "idle" ? "text-zinc-600" : "text-amber-400"}`}>
                   {samStatus === "idle" ? "not loaded" :
-                   samStatus === "loading" ? "downloading model..." :
+                   samStatus === "loading" ? "downloading..." :
                    samStatus === "embedding" ? "encoding image..." :
                    samStatus === "segmenting" ? "segmenting..." :
                    samStatus === "error" ? "error — retry?" : "● ready"}
                 </span>
               </div>
             </div>
-            {samStatus === "idle" && (
+            {samStatus === "idle" && !sam2Available && (
               <button onClick={loadSAM} className="w-full py-2 text-xs border border-purple-500/40 text-purple-400 hover:bg-purple-500/10 transition-all">
                 Load SAM model (~100MB)
               </button>
+            )}
+            {!sam2Available && (
+              <p className="text-xs text-zinc-600 leading-relaxed">
+                Start <span className="font-mono text-zinc-500">tools/sam2-server/server.py</span> for GPU acceleration.
+              </p>
             )}
             {(samStatus === "loading" || samStatus === "embedding" || samStatus === "segmenting") && (
               <div className="w-full py-2 text-xs text-center text-amber-400 border border-amber-800/50 animate-pulse">
@@ -1374,12 +1751,12 @@ export default function CollageWorkspace() {
             {samStatus === "ready" && !samMask && (
               <div className="bg-zinc-900 border border-zinc-800 p-2">
                 <p className="text-xs text-zinc-500 leading-relaxed">
-                  {selectedLayerId ? "Click anywhere on the image to segment an object." : "Select a layer first."}
+                  {selectedLayerId ? "Click anywhere on the image to segment." : "Select a layer first."}
                 </p>
               </div>
             )}
             {samStatus === "error" && (
-              <button onClick={() => { setSamStatus("idle"); samModelRef.current = null; }} className="w-full py-1.5 text-xs border border-red-700 text-red-400 hover:bg-red-900/20">
+              <button onClick={() => { setSamStatus("idle"); samModelRef.current = null; sam2SessionRef.current = null; }} className="w-full py-1.5 text-xs border border-red-700 text-red-400 hover:bg-red-900/20">
                 Reset &amp; retry
               </button>
             )}
@@ -1390,7 +1767,151 @@ export default function CollageWorkspace() {
                   <button onClick={samExtract} className="py-1.5 text-xs bg-purple-500/20 border border-purple-500/50 text-purple-300 hover:bg-purple-500/30 transition-all">Extract layer</button>
                   <button onClick={samClip} className="py-1.5 text-xs bg-zinc-800 border border-zinc-700 text-zinc-300 hover:border-purple-500/50 hover:text-purple-300 transition-all">Set clip</button>
                 </div>
+                <button onClick={() => setTool(TOOLS.REGION)}
+                  className="w-full py-1.5 text-xs bg-orange-500/15 border border-orange-500/40 text-orange-300 hover:bg-orange-500/25 transition-all">
+                  ⬟ Send mask to AI
+                </button>
                 <button onClick={() => { setSamMask(null); setSamMaskDims(null); }} className="w-full py-1 text-xs text-zinc-600 hover:text-zinc-400">Clear mask</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══ REGION TOOL PANEL ═══ */}
+        {tool === TOOLS.REGION && (
+          <div className="p-3 border-b border-zinc-800 space-y-3">
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${regionClosed ? "bg-orange-400" : "bg-orange-400 animate-pulse"}`} />
+              <p className="text-xs text-orange-400 uppercase tracking-widest font-bold">⬟ Region AI</p>
+            </div>
+            {!regionClosed && regionPoints.length === 0 && (
+              <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
+                <p className="text-xs text-zinc-500 leading-relaxed">
+                  Click to add polygon vertices.<br />
+                  Click first dot or press <kbd className="text-zinc-400 bg-zinc-800 px-1">Enter</kbd> to close.<br />
+                  <kbd className="text-zinc-400 bg-zinc-800 px-1">Esc</kbd> to cancel.
+                </p>
+                {samMask && samMaskDims && (
+                  <p className="text-xs text-orange-400 mt-1">SAM mask loaded — scroll down to Generate.</p>
+                )}
+              </div>
+            )}
+            {!regionClosed && regionPoints.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs text-zinc-500">{regionPoints.length} vertices — {regionPoints.length >= 3 ? "click start point or press Enter to close" : "add more points"}</p>
+                <button onClick={clearRegion} className="w-full py-1 text-xs text-zinc-600 hover:text-red-400">Clear polygon</button>
+              </div>
+            )}
+            {regionClosed && (
+              <div className="space-y-1">
+                <p className="text-xs text-orange-400 font-mono">Region closed ✓ ({regionPoints.length} pts)</p>
+                <button onClick={clearRegion} className="w-full py-1 text-xs text-zinc-600 hover:text-zinc-400">Redraw</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══ COMFYUI INPAINT PANEL ═══ (shown when region or SAM mask is ready) */}
+        {(tool === TOOLS.REGION || (tool === TOOLS.SEGMENT && samMask)) && (
+          <div className="p-3 border-b border-zinc-800 space-y-3">
+            <p className="text-xs text-zinc-400 uppercase tracking-widest font-bold">ComfyUI Generate</p>
+
+            {/* Server URL */}
+            <div>
+              <p className="text-xs text-zinc-600 mb-1">Server</p>
+              <input type="text" value={comfyUrl} onChange={e => setComfyUrl(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-300 px-2 py-1.5 font-mono" />
+            </div>
+
+            {/* Workflow */}
+            <div>
+              <p className="text-xs text-zinc-600 mb-1">Workflow</p>
+              <select value={comfyWorkflow} onChange={e => setComfyWorkflow(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 text-xs text-zinc-300 px-2 py-1.5 rounded-none">
+                {Object.entries(COMFY_WORKFLOWS).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Prompt */}
+            <div>
+              <p className="text-xs text-zinc-600 mb-1">Prompt</p>
+              <textarea value={comfyPrompt} onChange={e => setComfyPrompt(e.target.value)}
+                placeholder="describe what to generate..."
+                rows={3}
+                className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 px-2 py-1.5 resize-none placeholder-zinc-700" />
+            </div>
+
+            {/* Negative prompt (collapsed) */}
+            <div>
+              <p className="text-xs text-zinc-600 mb-1">Negative</p>
+              <input type="text" value={comfyNegPrompt} onChange={e => setComfyNegPrompt(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-400 px-2 py-1.5" />
+            </div>
+
+            {/* Denoise + Steps */}
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-600 w-12">denoise</span>
+                <input type="range" min="0.1" max="1.0" step="0.05" value={comfyDenoise}
+                  onChange={e => setComfyDenoise(+e.target.value)} className="flex-1 accent-orange-500" />
+                <span className="text-xs text-zinc-500 w-8">{comfyDenoise.toFixed(2)}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-600 w-12">steps</span>
+                <input type="range" min="8" max="50" step="1" value={comfySteps}
+                  onChange={e => setComfySteps(+e.target.value)} className="flex-1 accent-orange-500" />
+                <span className="text-xs text-zinc-500 w-8">{comfySteps}</span>
+              </div>
+            </div>
+
+            {/* Generate button */}
+            {comfyStatus === "idle" && (
+              <button onClick={runComfyInpaint}
+                disabled={!regionClosed && !samMask}
+                className={`w-full py-2 text-xs font-bold uppercase tracking-wider border transition-all ${
+                  (regionClosed || samMask)
+                    ? "bg-orange-500/20 border-orange-500 text-orange-300 hover:bg-orange-500/30"
+                    : "border-zinc-700 text-zinc-600 cursor-not-allowed"}`}>
+                ▶ Generate
+              </button>
+            )}
+
+            {/* Running status */}
+            {comfyStatus !== "idle" && comfyStatus !== "done" && !comfyStatus.startsWith("error") && (
+              <div className="w-full py-2 text-xs text-center text-amber-400 border border-amber-800/50 animate-pulse font-mono">
+                {comfyStatus}
+              </div>
+            )}
+
+            {/* Error */}
+            {comfyStatus.startsWith("error") && (
+              <div className="space-y-1">
+                <p className="text-xs text-red-400 break-words">{comfyStatus}</p>
+                <button onClick={() => setComfyStatus("idle")} className="w-full py-1.5 text-xs border border-red-700 text-red-400 hover:bg-red-900/20">Dismiss</button>
+              </div>
+            )}
+
+            {/* Result preview + accept */}
+            {comfyStatus === "done" && comfyResult && (
+              <div className="space-y-2">
+                <p className="text-xs text-orange-400 font-mono">Generation complete</p>
+                <img src={comfyResult} alt="AI result" className="w-full border border-orange-500/30" />
+                <div className="grid grid-cols-2 gap-1">
+                  <button onClick={acceptComfyResult}
+                    className="py-2 text-xs bg-orange-500/20 border border-orange-500 text-orange-300 hover:bg-orange-500/30 font-bold transition-all">
+                    ✓ Accept layer
+                  </button>
+                  <button onClick={() => { setComfyResult(null); setComfyResultBounds(null); setComfyStatus("idle"); }}
+                    className="py-2 text-xs border border-zinc-700 text-zinc-400 hover:text-red-400 hover:border-red-700 transition-all">
+                    ✕ Discard
+                  </button>
+                </div>
+                <button onClick={runComfyInpaint}
+                  className="w-full py-1.5 text-xs border border-orange-500/40 text-orange-400 hover:bg-orange-500/10">
+                  ↺ Regenerate
+                </button>
               </div>
             )}
           </div>
@@ -1575,7 +2096,7 @@ export default function CollageWorkspace() {
       <div ref={containerRef} className="flex-1 overflow-hidden relative bg-zinc-900"
         onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
         onDrop={e => { e.preventDefault(); e.stopPropagation(); if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); }}
-        style={{ cursor: tool === TOOLS.PAN ? "grab" : tool === TOOLS.DREAM ? (dreamActive ? "cell" : "crosshair") : (tool === TOOLS.LASSO || tool === TOOLS.DRAW || tool === TOOLS.WAND || tool === TOOLS.SEGMENT) ? "crosshair" : "default" }}>
+        style={{ cursor: tool === TOOLS.PAN ? "grab" : tool === TOOLS.DREAM ? (dreamActive ? "cell" : "crosshair") : (tool === TOOLS.LASSO || tool === TOOLS.DRAW || tool === TOOLS.WAND || tool === TOOLS.SEGMENT || tool === TOOLS.REGION) ? "crosshair" : "default" }}>
         <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
           <button onClick={() => setZoom(z => Math.max(0.1, z * 0.8))} className="w-7 h-7 text-xs bg-zinc-800/80 border border-zinc-700 text-zinc-400 hover:text-white">−</button>
           <span className="text-xs text-zinc-500 font-mono w-12 text-center">{Math.round(zoom * 100)}%</span>
