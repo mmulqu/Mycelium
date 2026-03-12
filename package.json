@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:sam2": "powershell -ExecutionPolicy Bypass -File .\\tools\\start-dev-with-sam2.ps1",
     "build": "vite build",
     "preview": "vite preview"
   },

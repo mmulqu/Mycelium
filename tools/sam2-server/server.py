@@ -41,10 +41,10 @@ app.add_middleware(
 
 # ── Model configs ─────────────────────────────────────────────────────────────
 MODEL_CONFIGS = {
-    "tiny":      ("sam2.1_hiera_tiny.yaml",      "sam2.1_hiera_tiny.pt"),
-    "small":     ("sam2.1_hiera_small.yaml",     "sam2.1_hiera_small.pt"),
-    "base_plus": ("sam2.1_hiera_base_plus.yaml", "sam2.1_hiera_base_plus.pt"),
-    "large":     ("sam2.1_hiera_large.yaml",     "sam2.1_hiera_large.pt"),
+    "tiny":      ("configs/sam2.1/sam2.1_hiera_t.yaml",  "sam2.1_hiera_tiny.pt"),
+    "small":     ("configs/sam2.1/sam2.1_hiera_s.yaml",  "sam2.1_hiera_small.pt"),
+    "base_plus": ("configs/sam2.1/sam2.1_hiera_b+.yaml", "sam2.1_hiera_base_plus.pt"),
+    "large":     ("configs/sam2.1/sam2.1_hiera_l.yaml",  "sam2.1_hiera_large.pt"),
 }
 
 # In-memory sessions: { session_id: { image_np, w, h, features, orig_hw } }
