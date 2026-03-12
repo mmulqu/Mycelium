@@ -601,8 +601,7 @@ export default function CollageWorkspace() {
   const [dragStart, setDragStart] = useState(null);
   const [lassoPoints, setLassoPoints] = useState([]);
   const [isLassoing, setIsLassoing] = useState(false);
-  const [showEffects, setShowEffects] = useState(false);
-  const [saveStatus, setSaveStatus] = useState("");
+const [saveStatus, setSaveStatus] = useState("");
   const [drawingPaths, setDrawingPaths] = useState([]);
   const [currentPath, setCurrentPath] = useState(null);
   const [canvasSize] = useState({ width: 1200, height: 800 });
@@ -733,6 +732,10 @@ export default function CollageWorkspace() {
 
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+
+  // Sidebar tab state: "tools" | "ai" | "fx" | "file" | null (collapsed)
+  const [sideTab, setSideTab] = useState("tools");
+  const toggleTab = (tab) => setSideTab(prev => prev === tab ? null : tab);
   useEffect(() => {
     setCanUndo(historyIndexRef.current > 0);
     setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
@@ -754,6 +757,13 @@ export default function CollageWorkspace() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [undo, redo, regionPoints, clearRegion, tool, regionClosed]);
+
+  // Auto-open the AI tab when switching to AI-powered tools
+  useEffect(() => {
+    if (tool === TOOLS.SEGMENT || tool === TOOLS.REGION || tool === TOOLS.WAND) {
+      setSideTab("ai");
+    }
+  }, [tool]);
 
   // ─── SAM2 server health check ───
   // Runs whenever the user switches to SEGMENT tool
@@ -1626,204 +1636,298 @@ export default function CollageWorkspace() {
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 text-zinc-200 overflow-hidden" style={{ fontFamily: "'JetBrains Mono', 'Fira Code', monospace" }}>
-      {/* LEFT */}
-      <div className="w-60 flex-shrink-0 border-r border-zinc-800 flex flex-col bg-zinc-950 overflow-y-auto">
-        <div className="p-4 border-b border-zinc-800">
-          <h1 className="text-lg font-black tracking-tight" style={{ fontFamily: "system-ui" }}>
-            <span className="text-pink-400">C</span>OLLAGE<span className="text-pink-400">.</span>WS
-          </h1>
-          <p className="text-xs text-zinc-600 mt-1">digital cut &amp; paste</p>
+      {/* ICON STRIP */}
+      <div className="w-10 flex-shrink-0 border-r border-zinc-800 flex flex-col items-center py-2 gap-0.5 bg-zinc-950">
+        <div className="mb-2 pb-2 border-b border-zinc-800 w-full text-center">
+          <span className="text-pink-400 text-xs font-black">C</span>
+        </div>
+        {[
+          ["tools", "⊞", "Tools"],
+          ["ai",    "◈", "AI — Wand, Segment, Region, ComfyUI"],
+          ["fx",    "✦", "Effects & ControlNet"],
+          ["file",  "⊟", "Import & Export"],
+        ].map(([tab, icon, tip]) => (
+          <button key={tab} title={tip} onClick={() => toggleTab(tab)}
+            className={`w-8 h-8 text-sm flex items-center justify-center border transition-all ${
+              sideTab === tab
+                ? "bg-pink-500/20 border-pink-500/50 text-pink-300"
+                : "border-transparent text-zinc-600 hover:text-zinc-300 hover:border-zinc-700"
+            }`}>
+            {icon}
+          </button>
+        ))}
+        <div className="flex-1" />
+        <button onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)"
+          className={`w-8 h-8 text-xs flex items-center justify-center border transition-all ${
+            canUndo ? "border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500" : "border-transparent text-zinc-800 cursor-not-allowed"
+          }`}>↩</button>
+        <button onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Y)"
+          className={`w-8 h-8 text-xs flex items-center justify-center border transition-all mb-1 ${
+            canRedo ? "border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500" : "border-transparent text-zinc-800 cursor-not-allowed"
+          }`}>↪</button>
+        {saveStatus && <div className="w-2 h-2 rounded-full bg-emerald-500 mb-1" title="Autosaved" />}
+      </div>
+
+      {/* CONTEXT PANEL */}
+      {sideTab && (
+      <div className="w-52 flex-shrink-0 border-r border-zinc-800 flex flex-col bg-zinc-950 overflow-y-auto">
+        <div className="px-3 py-2 border-b border-zinc-800 flex items-center justify-between flex-shrink-0">
+          <span className="text-xs text-zinc-500 uppercase tracking-widest">
+            {{ tools: "Tools", ai: "AI", fx: "Effects", file: "Files" }[sideTab]}
+          </span>
+          <button onClick={() => setSideTab(null)} className="text-zinc-700 hover:text-zinc-400 text-xs leading-none">✕</button>
         </div>
 
-        <div className="p-3 space-y-1 border-b border-zinc-800">
-          <p className="text-xs text-zinc-600 mb-2 uppercase tracking-widest">Tools</p>
-          <div className="grid grid-cols-2 gap-1">
-            <button className={toolBtn(TOOLS.SELECT)} onClick={() => setTool(TOOLS.SELECT)}>Select</button>
-            <button className={toolBtn(TOOLS.PAN)} onClick={() => setTool(TOOLS.PAN)}>Pan</button>
-            <button className={toolBtn(TOOLS.LASSO)} onClick={() => setTool(TOOLS.LASSO)}>Lasso</button>
-            <button className={toolBtn(TOOLS.DRAW)} onClick={() => setTool(TOOLS.DRAW)}>Draw</button>
-          </div>
-          <button className={toolBtn(TOOLS.DREAM) + " w-full mt-1"} onClick={() => setTool(TOOLS.DREAM)}>◎ Dream</button>
-          <div className="grid grid-cols-2 gap-1 mt-1">
-            <button className={toolBtn(TOOLS.WAND)} onClick={() => setTool(TOOLS.WAND)} title="Magic Wand: click to flood-fill select">⬡ Wand</button>
-            <button className={toolBtn(TOOLS.SEGMENT)} onClick={() => { setTool(TOOLS.SEGMENT); loadSAM(); }} title="SAM2: click to segment objects">◈ Segment</button>
-          </div>
-          <button className={toolBtn(TOOLS.REGION) + " w-full mt-1"} onClick={() => { setTool(TOOLS.REGION); clearRegion(); }} title="Region: paint polygon for AI inpainting">⬟ Region AI</button>
-        </div>
-
-        {tool === TOOLS.DRAW && (
-          <div className="p-3 border-b border-zinc-800 space-y-2">
-            <p className="text-xs text-zinc-600 uppercase tracking-widest">Brush</p>
-            <div className="flex items-center gap-2">
-              <input type="color" value={brushColor} onChange={e => setBrushColor(e.target.value)} className="w-8 h-8 border-0 bg-transparent cursor-pointer" />
-              <input type="range" min="1" max="30" value={brushSize} onChange={e => setBrushSize(+e.target.value)} className="flex-1 accent-pink-500" />
-              <span className="text-xs text-zinc-500 w-6">{brushSize}</span>
+        {/* ── TOOLS TAB ── */}
+        {sideTab === "tools" && (<>
+          <div className="p-2 border-b border-zinc-800 space-y-1">
+            <div className="grid grid-cols-2 gap-1">
+              <button className={toolBtn(TOOLS.SELECT)} onClick={() => setTool(TOOLS.SELECT)}>Select</button>
+              <button className={toolBtn(TOOLS.PAN)} onClick={() => setTool(TOOLS.PAN)}>Pan</button>
+              <button className={toolBtn(TOOLS.LASSO)} onClick={() => setTool(TOOLS.LASSO)}>Lasso</button>
+              <button className={toolBtn(TOOLS.DRAW)} onClick={() => setTool(TOOLS.DRAW)}>Draw</button>
             </div>
+            <button className={toolBtn(TOOLS.DREAM) + " w-full"} onClick={() => setTool(TOOLS.DREAM)}>◎ Dream</button>
           </div>
-        )}
-
-        {tool === TOOLS.LASSO && (
-          <div className="p-3 border-b border-zinc-800">
-            <p className="text-xs text-zinc-500 leading-relaxed">Draw around a region on the selected layer to clip it.</p>
-            {layers.find(l => l.id === selectedLayerId)?.clipPath && (
-              <button onClick={clearClip} className="mt-2 text-xs text-pink-400 hover:text-pink-300 underline">Remove clip</button>
-            )}
-          </div>
-        )}
-
-        {/* ═══ MAGIC WAND PANEL ═══ */}
-        {tool === TOOLS.WAND && (
-          <div className="p-3 border-b border-zinc-800 space-y-3">
-            <p className="text-xs text-zinc-400 uppercase tracking-widest font-bold">⬡ Magic Wand</p>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-500 w-16">tolerance</span>
-              <input type="range" min="1" max="120" value={wandTolerance} onChange={e => setWandTolerance(+e.target.value)} className="flex-1 accent-pink-500" />
-              <span className="text-xs text-zinc-500 w-8">{wandTolerance}</span>
-            </div>
-            <div className="bg-zinc-900 border border-zinc-800 p-2">
-              <p className="text-xs text-zinc-500 leading-relaxed">
-                {selectedLayerId ? "Click on a layer to flood-fill select by color." : "Select a layer first."}
-              </p>
-            </div>
-            {wandSelection && (
-              <div className="space-y-1">
-                <p className="text-xs text-pink-400 font-mono">Selection active</p>
-                <div className="grid grid-cols-2 gap-1">
-                  <button onClick={wandExtract} className="py-1.5 text-xs bg-pink-500/20 border border-pink-500/50 text-pink-300 hover:bg-pink-500/30 transition-all">Extract layer</button>
-                  <button onClick={wandClip} className="py-1.5 text-xs bg-zinc-800 border border-zinc-700 text-zinc-300 hover:border-pink-500/50 hover:text-pink-300 transition-all">Set clip</button>
-                </div>
-                <button onClick={() => setWandSelection(null)} className="w-full py-1 text-xs text-zinc-600 hover:text-zinc-400">Clear selection</button>
+          {tool === TOOLS.DRAW && (
+            <div className="p-3 border-b border-zinc-800 space-y-2">
+              <p className="text-xs text-zinc-600 uppercase tracking-widest">Brush</p>
+              <div className="flex items-center gap-2">
+                <input type="color" value={brushColor} onChange={e => setBrushColor(e.target.value)} className="w-8 h-8 border-0 bg-transparent cursor-pointer" />
+                <input type="range" min="1" max="30" value={brushSize} onChange={e => setBrushSize(+e.target.value)} className="flex-1 accent-pink-500" />
+                <span className="text-xs text-zinc-500 w-6">{brushSize}</span>
               </div>
-            )}
-          </div>
-        )}
-
-        {/* ═══ SAM2 SEGMENT PANEL ═══ */}
-        {tool === TOOLS.SEGMENT && (
-          <div className="p-3 border-b border-zinc-800 space-y-3">
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${samStatus === "ready" ? "bg-purple-400" : samStatus === "error" ? "bg-red-400" : "bg-amber-400 animate-pulse"}`} />
-              <p className="text-xs text-purple-400 uppercase tracking-widest font-bold">◈ Segment</p>
             </div>
-            <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
-              <div className="flex justify-between">
-                <span className="text-xs text-zinc-500">Backend</span>
+          )}
+          {tool === TOOLS.LASSO && (
+            <div className="p-3 border-b border-zinc-800">
+              <p className="text-xs text-zinc-500 leading-relaxed">Draw around a region to clip the selected layer.</p>
+              {layers.find(l => l.id === selectedLayerId)?.clipPath && (
+                <button onClick={clearClip} className="mt-2 text-xs text-pink-400 hover:text-pink-300 underline">Remove clip</button>
+              )}
+            </div>
+          )}
+
+          {/* Dream controls */}
+          {tool === TOOLS.DREAM && (
+            <div className="p-3 border-b border-zinc-800 space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <p className="text-xs text-emerald-400 uppercase tracking-widest font-bold">Dream Mode</p>
+              </div>
+              {!dreamActive ? (<>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Pattern</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    {Object.entries(RD_PRESETS).map(([k, p]) => (
+                      <button key={k} onClick={() => setDreamPreset(k)} className={dreamBtn(dreamPreset === k)} title={p.desc}>{p.name}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Seed from</p>
+                  <div className="grid grid-cols-3 gap-1">
+                    {[["image","Layer"],["random","Random"],["paint","Paint"]].map(([k,l]) => (
+                      <button key={k} onClick={() => setDreamSeedMode(k)} className={dreamBtn(dreamSeedMode === k)}>{l}</button>
+                    ))}
+                  </div>
+                  {dreamSeedMode === "image" && (
+                    <div className="mt-1">
+                      <select value={dreamSeedLayerId || ""} onChange={e => setDreamSeedLayerId(e.target.value || null)}
+                        className="w-full bg-zinc-800 border border-zinc-700 text-xs text-zinc-300 px-2 py-1.5 rounded-none">
+                        <option value="">All visible layers</option>
+                        {layers.filter(l => l.imageData).map(l => (
+                          <option key={l.id} value={l.id}>{l.name}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-zinc-600 mt-1">Dark pixels seed stronger growth</p>
+                    </div>
+                  )}
+                  {dreamSeedMode === "random" && <p className="text-xs text-zinc-600 mt-1">Scatter random seeds</p>}
+                  {dreamSeedMode === "paint" && <p className="text-xs text-zinc-600 mt-1">Click to place seeds</p>}
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Colormap</p>
+                  <div className="grid grid-cols-3 gap-1">
+                    {[...Object.keys(RD_COLORMAPS), "image", "warp"].map(cm => (
+                      <button key={cm} onClick={() => setDreamColormap(cm)} className={dreamBtn(dreamColormap === cm)}>{cm}</button>
+                    ))}
+                  </div>
+                  {(dreamColormap === "image" || dreamColormap === "warp") && dreamSeedMode !== "image" && (
+                    <p className="text-xs text-amber-500 mt-1">Set seed to "Layer" for {dreamColormap} mode</p>
+                  )}
+                  {dreamColormap === "warp" && (
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-xs text-zinc-500 w-10">warp</span>
+                      <input type="range" min="2" max="50" value={dreamWarpStrength} onChange={e => setDreamWarpStrength(+e.target.value)} className="flex-1 accent-emerald-500" />
+                      <span className="text-xs text-zinc-500 w-6">{dreamWarpStrength}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-zinc-500 w-8">res</span>
+                  <input type="range" min="64" max="400" step="16" value={dreamRes} onChange={e => setDreamRes(+e.target.value)} className="flex-1 accent-emerald-500" />
+                  <span className="text-xs text-zinc-500 w-8">{dreamRes}</span>
+                </div>
+                <p className="text-xs text-zinc-600">{dreamSeedMode === "paint" ? "Place seeds then drag a region." : "Drag on canvas to select a region."}</p>
+                <button onClick={initDream} disabled={!dreamRegion || dreamRegion.w < 10}
+                  className={`w-full py-2 text-xs font-bold uppercase tracking-wider border transition-all ${
+                    dreamRegion && dreamRegion.w >= 10 ? "bg-emerald-500/20 border-emerald-500 text-emerald-300 hover:bg-emerald-500/30" : "border-zinc-700 text-zinc-600 cursor-not-allowed"}`}>
+                  ▶ Start Dreaming
+                </button>
+                {dreamPaintPoints.length > 0 && (
+                  <button onClick={() => setDreamPaintPoints([])} className="w-full text-xs text-zinc-600 hover:text-zinc-400">Clear seeds</button>
+                )}
+              </>) : (<>
+                <div className="bg-zinc-900 border border-emerald-900/50 p-2 space-y-1">
+                  <div className="flex justify-between"><span className="text-xs text-zinc-500">Pattern</span><span className="text-xs text-emerald-400">{RD_PRESETS[dreamPreset].name}</span></div>
+                  <div className="flex justify-between"><span className="text-xs text-zinc-500">Iters</span><span className="text-xs text-emerald-400 font-mono">{dreamIterations}</span></div>
+                  <div className="flex justify-between"><span className="text-xs text-zinc-500">Status</span>
+                    <span className={`text-xs ${dreamRunning ? "text-emerald-400" : "text-amber-400"}`}>{dreamRunning ? "● evolving" : "◆ paused"}</span></div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-zinc-500 w-12">speed</span>
+                  <input type="range" min="1" max="30" value={dreamSpeed} onChange={e => setDreamSpeed(+e.target.value)} className="flex-1 accent-emerald-500" />
+                  <span className="text-xs text-zinc-500 w-6">{dreamSpeed}</span>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Colormap</p>
+                  <div className="grid grid-cols-3 gap-1">
+                    {[...Object.keys(RD_COLORMAPS),
+                      ...(rdRef.current?.seedColors ? ["image"] : []),
+                      ...(dreamSrcPixelsRef.current ? ["warp"] : [])
+                    ].map(cm => (
+                      <button key={cm} onClick={() => setDreamColormap(cm)} className={dreamBtn(dreamColormap === cm)}>{cm}</button>
+                    ))}
+                  </div>
+                  {dreamColormap === "warp" && (
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-xs text-zinc-500 w-10">warp</span>
+                      <input type="range" min="2" max="50" value={dreamWarpStrength} onChange={e => setDreamWarpStrength(+e.target.value)} className="flex-1 accent-emerald-500" />
+                      <span className="text-xs text-zinc-500 w-6">{dreamWarpStrength}</span>
+                    </div>
+                  )}
+                </div>
+                <p className="text-xs text-zinc-600">Click inside dream to inject seeds</p>
+                <div className="grid grid-cols-2 gap-1">
+                  <button onClick={dreamRunning ? pauseDream : resumeDream}
+                    className="py-2 text-xs border border-zinc-700 text-zinc-300 hover:border-emerald-500/50 hover:text-emerald-300 transition-all">
+                    {dreamRunning ? "⏸ Pause" : "▶ Resume"}</button>
+                  <button onClick={freezeDream}
+                    className="py-2 text-xs bg-emerald-500/20 border border-emerald-500 text-emerald-300 hover:bg-emerald-500/30 transition-all font-bold">
+                    ❄ Freeze</button>
+                </div>
+                <button onClick={resetDream} className="w-full py-1.5 text-xs border border-zinc-800 text-zinc-600 hover:text-red-400 hover:border-red-800 transition-all">Reset</button>
+              </>)}
+            </div>
+          )}
+        </>)}
+
+        {/* ── AI TAB ── */}
+        {sideTab === "ai" && (<>
+          <div className="p-2 border-b border-zinc-800 space-y-1">
+            <button className={toolBtn(TOOLS.WAND) + " w-full"} onClick={() => setTool(TOOLS.WAND)}>⬡ Wand</button>
+            <button className={toolBtn(TOOLS.SEGMENT) + " w-full"} onClick={() => { setTool(TOOLS.SEGMENT); loadSAM(); }}>◈ Segment</button>
+            <button className={toolBtn(TOOLS.REGION) + " w-full"} onClick={() => { setTool(TOOLS.REGION); clearRegion(); }}>⬟ Region AI</button>
+          </div>
+
+          {/* Wand options */}
+          {tool === TOOLS.WAND && (
+            <div className="p-3 border-b border-zinc-800 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-500 w-14">tolerance</span>
+                <input type="range" min="1" max="120" value={wandTolerance} onChange={e => setWandTolerance(+e.target.value)} className="flex-1 accent-pink-500" />
+                <span className="text-xs text-zinc-500 w-8">{wandTolerance}</span>
+              </div>
+              <p className="text-xs text-zinc-600">{selectedLayerId ? "Click to flood-fill select." : "Select a layer first."}</p>
+              {wandSelection && (
+                <div className="space-y-1">
+                  <p className="text-xs text-pink-400 font-mono">Selection active</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    <button onClick={wandExtract} className="py-1.5 text-xs bg-pink-500/20 border border-pink-500/50 text-pink-300 hover:bg-pink-500/30 transition-all">Extract</button>
+                    <button onClick={wandClip} className="py-1.5 text-xs bg-zinc-800 border border-zinc-700 text-zinc-300 hover:border-pink-500/50 hover:text-pink-300 transition-all">Clip</button>
+                  </div>
+                  <button onClick={() => setWandSelection(null)} className="w-full py-1 text-xs text-zinc-600 hover:text-zinc-400">Clear</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* SAM2 options */}
+          {tool === TOOLS.SEGMENT && (
+            <div className="p-3 border-b border-zinc-800 space-y-2">
+              <div className="flex items-center justify-between">
                 <span className={`text-xs font-mono ${sam2Available ? "text-green-400" : "text-zinc-500"}`}>
                   {sam2Available ? "● SAM2 CUDA" : "○ SAM browser"}
                 </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-xs text-zinc-500">Model</span>
-                <span className="text-xs text-zinc-400 font-mono">
-                  {sam2Available ? "sam2.1-small" : "sam-vit-base"}
+                <span className={`text-xs font-mono ${samStatus === "ready" ? "text-purple-400" : samStatus === "error" ? "text-red-400" : "text-amber-400"}`}>
+                  {samStatus === "idle" ? "not loaded" : samStatus === "loading" ? "loading..." :
+                   samStatus === "embedding" ? "encoding..." : samStatus === "segmenting" ? "working..." :
+                   samStatus === "error" ? "error" : "● ready"}
                 </span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-xs text-zinc-500">Status</span>
-                <span className={`text-xs font-mono ${
-                  samStatus === "ready" ? "text-purple-400" :
-                  samStatus === "error" ? "text-red-400" :
-                  samStatus === "idle" ? "text-zinc-600" : "text-amber-400"}`}>
-                  {samStatus === "idle" ? "not loaded" :
-                   samStatus === "loading" ? "downloading..." :
-                   samStatus === "embedding" ? "encoding image..." :
-                   samStatus === "segmenting" ? "segmenting..." :
-                   samStatus === "error" ? "error — retry?" : "● ready"}
-                </span>
-              </div>
-            </div>
-            {samStatus === "idle" && !sam2Available && (
-              <button onClick={loadSAM} className="w-full py-2 text-xs border border-purple-500/40 text-purple-400 hover:bg-purple-500/10 transition-all">
-                Load SAM model (~100MB)
-              </button>
-            )}
-            {!sam2Available && (
-              <p className="text-xs text-zinc-600 leading-relaxed">
-                Start <span className="font-mono text-zinc-500">tools/sam2-server/server.py</span> for GPU acceleration.
-              </p>
-            )}
-            {(samStatus === "loading" || samStatus === "embedding" || samStatus === "segmenting") && (
-              <div className="w-full py-2 text-xs text-center text-amber-400 border border-amber-800/50 animate-pulse">
-                {samStatus === "loading" ? "Downloading model..." :
-                 samStatus === "embedding" ? "Encoding image..." : "Segmenting..."}
-              </div>
-            )}
-            {samStatus === "ready" && !samMask && (
-              <div className="bg-zinc-900 border border-zinc-800 p-2">
-                <p className="text-xs text-zinc-500 leading-relaxed">
-                  {selectedLayerId ? "Click anywhere on the image to segment." : "Select a layer first."}
-                </p>
-              </div>
-            )}
-            {samStatus === "error" && (
-              <button onClick={() => { setSamStatus("idle"); samModelRef.current = null; sam2SessionRef.current = null; }} className="w-full py-1.5 text-xs border border-red-700 text-red-400 hover:bg-red-900/20">
-                Reset &amp; retry
-              </button>
-            )}
-            {samMask && samMaskDims && (
-              <div className="space-y-1">
-                <p className="text-xs text-purple-400 font-mono">Mask ready</p>
-                <div className="grid grid-cols-2 gap-1">
-                  <button onClick={samExtract} className="py-1.5 text-xs bg-purple-500/20 border border-purple-500/50 text-purple-300 hover:bg-purple-500/30 transition-all">Extract layer</button>
-                  <button onClick={samClip} className="py-1.5 text-xs bg-zinc-800 border border-zinc-700 text-zinc-300 hover:border-purple-500/50 hover:text-purple-300 transition-all">Set clip</button>
+              {samStatus === "idle" && !sam2Available && (
+                <button onClick={loadSAM} className="w-full py-1.5 text-xs border border-purple-500/40 text-purple-400 hover:bg-purple-500/10 transition-all">Load SAM (~100MB)</button>
+              )}
+              {samStatus === "error" && (
+                <button onClick={() => { setSamStatus("idle"); samModelRef.current = null; sam2SessionRef.current = null; }} className="w-full py-1.5 text-xs border border-red-700 text-red-400 hover:bg-red-900/20">Reset &amp; retry</button>
+              )}
+              {(samStatus === "loading" || samStatus === "embedding" || samStatus === "segmenting") && (
+                <div className="py-1.5 text-xs text-center text-amber-400 border border-amber-800/50 animate-pulse">
+                  {samStatus === "loading" ? "Downloading..." : samStatus === "embedding" ? "Encoding…" : "Segmenting…"}
                 </div>
-                <button onClick={() => setTool(TOOLS.REGION)}
-                  className="w-full py-1.5 text-xs bg-orange-500/15 border border-orange-500/40 text-orange-300 hover:bg-orange-500/25 transition-all">
-                  ⬟ Send mask to AI
-                </button>
-                <button onClick={() => { setSamMask(null); setSamMaskDims(null); }} className="w-full py-1 text-xs text-zinc-600 hover:text-zinc-400">Clear mask</button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ═══ REGION TOOL PANEL ═══ */}
-        {tool === TOOLS.REGION && (
-          <div className="p-3 border-b border-zinc-800 space-y-3">
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${regionClosed ? "bg-orange-400" : "bg-orange-400 animate-pulse"}`} />
-              <p className="text-xs text-orange-400 uppercase tracking-widest font-bold">⬟ Region AI</p>
+              )}
+              {samStatus === "ready" && !samMask && (
+                <p className="text-xs text-zinc-600">{selectedLayerId ? "Click image to segment." : "Select a layer first."}</p>
+              )}
+              {samMask && samMaskDims && (
+                <div className="space-y-1">
+                  <p className="text-xs text-purple-400 font-mono">Mask ready</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    <button onClick={samExtract} className="py-1.5 text-xs bg-purple-500/20 border border-purple-500/50 text-purple-300 hover:bg-purple-500/30 transition-all">Extract</button>
+                    <button onClick={samClip} className="py-1.5 text-xs bg-zinc-800 border border-zinc-700 text-zinc-300 hover:border-purple-500/50 hover:text-purple-300 transition-all">Clip</button>
+                  </div>
+                  <button onClick={() => setTool(TOOLS.REGION)}
+                    className="w-full py-1.5 text-xs bg-orange-500/15 border border-orange-500/40 text-orange-300 hover:bg-orange-500/25 transition-all">
+                    ⬟ Send mask to AI
+                  </button>
+                  <button onClick={() => { setSamMask(null); setSamMaskDims(null); }} className="w-full py-1 text-xs text-zinc-600 hover:text-zinc-400">Clear</button>
+                </div>
+              )}
             </div>
-            {!regionClosed && regionPoints.length === 0 && (
-              <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
+          )}
+
+          {/* Region options */}
+          {tool === TOOLS.REGION && (
+            <div className="p-3 border-b border-zinc-800 space-y-2">
+              {!regionClosed && regionPoints.length === 0 && (
                 <p className="text-xs text-zinc-500 leading-relaxed">
-                  Click to add polygon vertices.<br />
-                  Click first dot or press <kbd className="text-zinc-400 bg-zinc-800 px-1">Enter</kbd> to close.<br />
-                  <kbd className="text-zinc-400 bg-zinc-800 px-1">Esc</kbd> to cancel.
+                  Click to add vertices. Click start dot or <kbd className="text-zinc-400 bg-zinc-800 px-1">↵</kbd> to close. <kbd className="text-zinc-400 bg-zinc-800 px-1">Esc</kbd> cancel.
                 </p>
-                {samMask && samMaskDims && (
-                  <p className="text-xs text-orange-400 mt-1">SAM mask loaded — scroll down to Generate.</p>
-                )}
-              </div>
-            )}
-            {!regionClosed && regionPoints.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs text-zinc-500">{regionPoints.length} vertices — {regionPoints.length >= 3 ? "click start point or press Enter to close" : "add more points"}</p>
-                <button onClick={clearRegion} className="w-full py-1 text-xs text-zinc-600 hover:text-red-400">Clear polygon</button>
-              </div>
-            )}
-            {regionClosed && (
-              <div className="space-y-1">
-                <p className="text-xs text-orange-400 font-mono">Region closed ✓ ({regionPoints.length} pts)</p>
-                <button onClick={clearRegion} className="w-full py-1 text-xs text-zinc-600 hover:text-zinc-400">Redraw</button>
-              </div>
-            )}
-          </div>
-        )}
+              )}
+              {!regionClosed && regionPoints.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs text-zinc-500">{regionPoints.length} pts — {regionPoints.length >= 3 ? "close or keep adding" : "need ≥3"}</p>
+                  <button onClick={clearRegion} className="w-full py-1 text-xs text-zinc-600 hover:text-red-400">Clear</button>
+                </div>
+              )}
+              {regionClosed && (
+                <div className="space-y-1">
+                  <p className="text-xs text-orange-400 font-mono">Region closed ✓</p>
+                  <button onClick={clearRegion} className="w-full py-1 text-xs text-zinc-600 hover:text-zinc-400">Redraw</button>
+                </div>
+              )}
+            </div>
+          )}
 
-        {/* ═══ COMFYUI INPAINT PANEL ═══ (shown when region or SAM mask is ready) */}
-        {(tool === TOOLS.REGION || (tool === TOOLS.SEGMENT && samMask)) && (
-          <div className="p-3 border-b border-zinc-800 space-y-3">
-            <p className="text-xs text-zinc-400 uppercase tracking-widest font-bold">ComfyUI Generate</p>
-
-            {/* Server URL */}
+          {/* ComfyUI Generate — shown when any region/mask source is ready */}
+          <div className="p-3 space-y-3">
+            <p className="text-xs text-zinc-500 uppercase tracking-widest font-bold">ComfyUI Generate</p>
             <div>
               <p className="text-xs text-zinc-600 mb-1">Server</p>
               <input type="text" value={comfyUrl} onChange={e => setComfyUrl(e.target.value)}
-                className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-300 px-2 py-1.5 font-mono" />
+                className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-300 px-2 py-1 font-mono" />
             </div>
-
-            {/* Workflow */}
             <div>
               <p className="text-xs text-zinc-600 mb-1">Workflow</p>
               <select value={comfyWorkflow} onChange={e => setComfyWorkflow(e.target.value)}
@@ -1833,264 +1937,117 @@ export default function CollageWorkspace() {
                 ))}
               </select>
             </div>
-
-            {/* Prompt */}
             <div>
               <p className="text-xs text-zinc-600 mb-1">Prompt</p>
               <textarea value={comfyPrompt} onChange={e => setComfyPrompt(e.target.value)}
-                placeholder="describe what to generate..."
-                rows={3}
+                placeholder="describe what to generate…" rows={3}
                 className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 px-2 py-1.5 resize-none placeholder-zinc-700" />
             </div>
-
-            {/* Negative prompt (collapsed) */}
             <div>
               <p className="text-xs text-zinc-600 mb-1">Negative</p>
               <input type="text" value={comfyNegPrompt} onChange={e => setComfyNegPrompt(e.target.value)}
-                className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-400 px-2 py-1.5" />
+                className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-400 px-2 py-1" />
             </div>
-
-            {/* Denoise + Steps */}
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <span className="text-xs text-zinc-600 w-12">denoise</span>
-                <input type="range" min="0.1" max="1.0" step="0.05" value={comfyDenoise}
-                  onChange={e => setComfyDenoise(+e.target.value)} className="flex-1 accent-orange-500" />
+                <input type="range" min="0.1" max="1.0" step="0.05" value={comfyDenoise} onChange={e => setComfyDenoise(+e.target.value)} className="flex-1 accent-orange-500" />
                 <span className="text-xs text-zinc-500 w-8">{comfyDenoise.toFixed(2)}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-zinc-600 w-12">steps</span>
-                <input type="range" min="8" max="50" step="1" value={comfySteps}
-                  onChange={e => setComfySteps(+e.target.value)} className="flex-1 accent-orange-500" />
+                <input type="range" min="8" max="50" step="1" value={comfySteps} onChange={e => setComfySteps(+e.target.value)} className="flex-1 accent-orange-500" />
                 <span className="text-xs text-zinc-500 w-8">{comfySteps}</span>
               </div>
             </div>
-
-            {/* Generate button */}
             {comfyStatus === "idle" && (
-              <button onClick={runComfyInpaint}
-                disabled={!regionClosed && !samMask}
+              <button onClick={runComfyInpaint} disabled={!regionClosed && !samMask}
                 className={`w-full py-2 text-xs font-bold uppercase tracking-wider border transition-all ${
-                  (regionClosed || samMask)
-                    ? "bg-orange-500/20 border-orange-500 text-orange-300 hover:bg-orange-500/30"
-                    : "border-zinc-700 text-zinc-600 cursor-not-allowed"}`}>
+                  (regionClosed || samMask) ? "bg-orange-500/20 border-orange-500 text-orange-300 hover:bg-orange-500/30" : "border-zinc-700 text-zinc-600 cursor-not-allowed"}`}>
                 ▶ Generate
               </button>
             )}
-
-            {/* Running status */}
             {comfyStatus !== "idle" && comfyStatus !== "done" && !comfyStatus.startsWith("error") && (
-              <div className="w-full py-2 text-xs text-center text-amber-400 border border-amber-800/50 animate-pulse font-mono">
-                {comfyStatus}
-              </div>
+              <div className="py-2 text-xs text-center text-amber-400 border border-amber-800/50 animate-pulse font-mono">{comfyStatus}</div>
             )}
-
-            {/* Error */}
             {comfyStatus.startsWith("error") && (
               <div className="space-y-1">
                 <p className="text-xs text-red-400 break-words">{comfyStatus}</p>
                 <button onClick={() => setComfyStatus("idle")} className="w-full py-1.5 text-xs border border-red-700 text-red-400 hover:bg-red-900/20">Dismiss</button>
               </div>
             )}
-
-            {/* Result preview + accept */}
             {comfyStatus === "done" && comfyResult && (
               <div className="space-y-2">
-                <p className="text-xs text-orange-400 font-mono">Generation complete</p>
+                <p className="text-xs text-orange-400 font-mono">Done ✓</p>
                 <img src={comfyResult} alt="AI result" className="w-full border border-orange-500/30" />
                 <div className="grid grid-cols-2 gap-1">
                   <button onClick={acceptComfyResult}
-                    className="py-2 text-xs bg-orange-500/20 border border-orange-500 text-orange-300 hover:bg-orange-500/30 font-bold transition-all">
-                    ✓ Accept layer
-                  </button>
+                    className="py-1.5 text-xs bg-orange-500/20 border border-orange-500 text-orange-300 hover:bg-orange-500/30 font-bold transition-all">✓ Accept</button>
                   <button onClick={() => { setComfyResult(null); setComfyResultBounds(null); setComfyStatus("idle"); }}
-                    className="py-2 text-xs border border-zinc-700 text-zinc-400 hover:text-red-400 hover:border-red-700 transition-all">
-                    ✕ Discard
-                  </button>
+                    className="py-1.5 text-xs border border-zinc-700 text-zinc-400 hover:text-red-400 hover:border-red-700 transition-all">✕ Discard</button>
                 </div>
-                <button onClick={runComfyInpaint}
-                  className="w-full py-1.5 text-xs border border-orange-500/40 text-orange-400 hover:bg-orange-500/10">
-                  ↺ Regenerate
-                </button>
+                <button onClick={runComfyInpaint} className="w-full py-1 text-xs border border-orange-500/40 text-orange-400 hover:bg-orange-500/10">↺ Regenerate</button>
               </div>
             )}
           </div>
-        )}
+        </>)}
 
-        {/* ═══ DREAM PANEL ═══ */}
-        {tool === TOOLS.DREAM && (
-          <div className="p-3 border-b border-zinc-800 space-y-3">
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <p className="text-xs text-emerald-400 uppercase tracking-widest font-bold">Dream Mode</p>
-            </div>
-
-            {!dreamActive ? (<>
-              <div>
-                <p className="text-xs text-zinc-500 mb-1">Pattern</p>
-                <div className="grid grid-cols-2 gap-1">
-                  {Object.entries(RD_PRESETS).map(([k, p]) => (
-                    <button key={k} onClick={() => setDreamPreset(k)} className={dreamBtn(dreamPreset === k)} title={p.desc}>{p.name}</button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <p className="text-xs text-zinc-500 mb-1">Seed from</p>
-                <div className="grid grid-cols-3 gap-1">
-                  {[["image","Layer"],["random","Random"],["paint","Paint"]].map(([k,l]) => (
-                    <button key={k} onClick={() => setDreamSeedMode(k)} className={dreamBtn(dreamSeedMode === k)}>{l}</button>
-                  ))}
-                </div>
-                {dreamSeedMode === "image" && (
-                  <div className="mt-1">
-                    <select value={dreamSeedLayerId || ""} onChange={e => setDreamSeedLayerId(e.target.value || null)}
-                      className="w-full bg-zinc-800 border border-zinc-700 text-xs text-zinc-300 px-2 py-1.5 rounded-none">
-                      <option value="">All visible layers</option>
-                      {layers.filter(l => l.imageData).map(l => (
-                        <option key={l.id} value={l.id}>{l.name}</option>
-                      ))}
-                    </select>
-                    <p className="text-xs text-zinc-600 mt-1">Dark pixels seed stronger growth</p>
-                  </div>
-                )}
-                {dreamSeedMode === "random" && <p className="text-xs text-zinc-600 mt-1">Scatter random seeds</p>}
-                {dreamSeedMode === "paint" && <p className="text-xs text-zinc-600 mt-1">Click to place seeds</p>}
-              </div>
-              <div>
-                <p className="text-xs text-zinc-500 mb-1">Colormap</p>
-                <div className="grid grid-cols-3 gap-1">
-                  {[...Object.keys(RD_COLORMAPS), "image", "warp"].map(cm => (
-                    <button key={cm} onClick={() => setDreamColormap(cm)}
-                      className={dreamBtn(dreamColormap === cm)}>{cm}</button>
-                  ))}
-                </div>
-                {(dreamColormap === "image" || dreamColormap === "warp") && dreamSeedMode !== "image" && (
-                  <p className="text-xs text-amber-500 mt-1">Set seed to "Layer" for {dreamColormap} mode</p>
-                )}
-                {dreamColormap === "warp" && (
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-xs text-zinc-500 w-10">warp</span>
-                    <input type="range" min="2" max="50" value={dreamWarpStrength} onChange={e => setDreamWarpStrength(+e.target.value)} className="flex-1 accent-emerald-500" />
-                    <span className="text-xs text-zinc-500 w-6">{dreamWarpStrength}</span>
-                  </div>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-zinc-500 w-8">res</span>
-                <input type="range" min="64" max="400" step="16" value={dreamRes} onChange={e => setDreamRes(+e.target.value)} className="flex-1 accent-emerald-500" />
-                <span className="text-xs text-zinc-500 w-8">{dreamRes}</span>
-              </div>
-              <div className="bg-zinc-900 border border-zinc-800 p-2">
-                <p className="text-xs text-zinc-500 leading-relaxed">
-                  {dreamSeedMode === "paint" ? "1. Click to place seeds 2. Drag region 3. Start" : "Drag on canvas to select a region, then Start."}
-                </p>
-              </div>
-              <button onClick={initDream} disabled={!dreamRegion || dreamRegion.w < 10}
-                className={`w-full py-2 text-xs font-bold uppercase tracking-wider border transition-all ${
-                  dreamRegion && dreamRegion.w >= 10 ? "bg-emerald-500/20 border-emerald-500 text-emerald-300 hover:bg-emerald-500/30" : "border-zinc-700 text-zinc-600 cursor-not-allowed"}`}>
-                ▶ Start Dreaming
-              </button>
-              {dreamPaintPoints.length > 0 && (
-                <button onClick={() => setDreamPaintPoints([])} className="w-full text-xs text-zinc-600 hover:text-zinc-400">Clear seeds</button>
-              )}
-            </>) : (<>
-              <div className="bg-zinc-900 border border-emerald-900/50 p-2 space-y-1">
-                <div className="flex justify-between"><span className="text-xs text-zinc-500">Pattern</span><span className="text-xs text-emerald-400">{RD_PRESETS[dreamPreset].name}</span></div>
-                <div className="flex justify-between"><span className="text-xs text-zinc-500">Iterations</span><span className="text-xs text-emerald-400 font-mono">{dreamIterations}</span></div>
-                <div className="flex justify-between"><span className="text-xs text-zinc-500">Status</span>
-                  <span className={`text-xs ${dreamRunning ? "text-emerald-400" : "text-amber-400"}`}>{dreamRunning ? "● evolving" : "◆ paused"}</span></div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-zinc-500 w-12">speed</span>
-                <input type="range" min="1" max="30" value={dreamSpeed} onChange={e => setDreamSpeed(+e.target.value)} className="flex-1 accent-emerald-500" />
-                <span className="text-xs text-zinc-500 w-6">{dreamSpeed}</span>
-              </div>
-              <div>
-                <p className="text-xs text-zinc-500 mb-1">Colormap</p>
-                <div className="grid grid-cols-3 gap-1">
-                  {[...Object.keys(RD_COLORMAPS),
-                    ...(rdRef.current?.seedColors ? ["image"] : []),
-                    ...(dreamSrcPixelsRef.current ? ["warp"] : [])
-                  ].map(cm => (
-                    <button key={cm} onClick={() => setDreamColormap(cm)} className={dreamBtn(dreamColormap === cm)}>{cm}</button>
-                  ))}
-                </div>
-                {dreamColormap === "warp" && (
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-xs text-zinc-500 w-10">warp</span>
-                    <input type="range" min="2" max="50" value={dreamWarpStrength} onChange={e => setDreamWarpStrength(+e.target.value)} className="flex-1 accent-emerald-500" />
-                    <span className="text-xs text-zinc-500 w-6">{dreamWarpStrength}</span>
-                  </div>
-                )}
-              </div>
-              <p className="text-xs text-zinc-600">Click inside dream to inject seeds</p>
-              <div className="grid grid-cols-2 gap-1">
-                <button onClick={dreamRunning ? pauseDream : resumeDream}
-                  className="py-2 text-xs border border-zinc-700 text-zinc-300 hover:border-emerald-500/50 hover:text-emerald-300 transition-all">
-                  {dreamRunning ? "⏸ Pause" : "▶ Resume"}</button>
-                <button onClick={freezeDream}
-                  className="py-2 text-xs bg-emerald-500/20 border border-emerald-500 text-emerald-300 hover:bg-emerald-500/30 transition-all font-bold">
-                  ❄ Freeze</button>
-              </div>
-              <button onClick={resetDream} className="w-full py-1.5 text-xs border border-zinc-800 text-zinc-600 hover:text-red-400 hover:border-red-800 transition-all">Reset</button>
-            </>)}
-          </div>
-        )}
-
-        <div className="p-3 border-b border-zinc-800">
-          <div className="grid grid-cols-2 gap-1">
-            <button onClick={undo} disabled={!canUndo}
-              className={`px-3 py-2 text-xs font-bold tracking-wider uppercase border transition-all duration-150 ${canUndo ? "bg-transparent border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200" : "border-zinc-800 text-zinc-700 cursor-not-allowed"}`}>
-              Undo</button>
-            <button onClick={redo} disabled={!canRedo}
-              className={`px-3 py-2 text-xs font-bold tracking-wider uppercase border transition-all duration-150 ${canRedo ? "bg-transparent border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200" : "border-zinc-800 text-zinc-700 cursor-not-allowed"}`}>
-              Redo</button>
-          </div>
-        </div>
-
-        <div className="p-3 border-b border-zinc-800 space-y-2">
-          <p className="text-xs text-zinc-600 uppercase tracking-widest">Import</p>
-          <button onClick={() => fileInputRef.current?.click()} className="w-full py-2 text-xs border border-dashed border-zinc-700 text-zinc-400 hover:border-pink-500 hover:text-pink-400 transition-all">Browse files...</button>
-          <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => { handleFiles(e.target.files); e.target.value = ""; }} />
-          <p className="text-xs text-zinc-600 text-center">or drop / paste</p>
-        </div>
-
-        <div className="p-3 border-b border-zinc-800">
-          <button onClick={() => setShowEffects(!showEffects)} className="flex items-center justify-between w-full text-xs text-zinc-600 uppercase tracking-widest">
-            <span>Effects</span><span className="text-pink-400">{showEffects ? "−" : "+"}</span></button>
-          {showEffects && (
-            <div className="mt-2 space-y-2">
+        {/* ── FX TAB ── */}
+        {sideTab === "fx" && (
+          <div className="p-3 space-y-4">
+            <div>
+              <p className="text-xs text-zinc-600 uppercase tracking-widest mb-2">Effects</p>
               <div className="grid grid-cols-2 gap-1">
                 {["dither","pixelsort","invert","posterize","chromatic","glitch","threshold","halftone"].map(f => (
                   <button key={f} onClick={() => applyEffect(f)} disabled={!selectedLayerId}
                     className={fxBtn + (selectedLayerId ? "" : " opacity-30 cursor-not-allowed")}>{f}</button>
                 ))}
               </div>
-              <p className="text-xs text-zinc-700 uppercase tracking-widest pt-1">ControlNet Maps</p>
-              <div className="grid grid-cols-3 gap-1">
+            </div>
+            <div>
+              <p className="text-xs text-zinc-700 uppercase tracking-widest mb-1">ControlNet Maps</p>
+              <div className="grid grid-cols-2 gap-1">
                 {["blur","edge","emboss","depth"].map(f => (
                   <button key={f} onClick={() => applyEffect(f)} disabled={!selectedLayerId}
                     className={fxBtn + " text-cyan-400/80 hover:text-cyan-300 hover:border-cyan-500/50" + (selectedLayerId ? "" : " opacity-30 cursor-not-allowed")}>{f}</button>
                 ))}
               </div>
-              <p className="text-xs text-zinc-700 uppercase tracking-widest pt-1">Export Map</p>
+            </div>
+            <div>
+              <p className="text-xs text-zinc-700 uppercase tracking-widest mb-1">Export Map</p>
               <div className="grid grid-cols-3 gap-1">
                 {[["edge","Canny"],["emboss","Normal"],["depth","Depth"]].map(([t,l]) => (
                   <button key={t} onClick={() => exportControlMap(t)} disabled={!selectedLayerId}
                     className={"px-2 py-1.5 text-xs font-mono bg-zinc-800 border border-cyan-900 text-cyan-600 hover:bg-cyan-500/10 hover:border-cyan-500/50 hover:text-cyan-300 transition-all" + (selectedLayerId ? "" : " opacity-30 cursor-not-allowed")}>↓{l}</button>
                 ))}
               </div>
-              <p className="text-xs text-zinc-700 leading-relaxed">Edge/Normal/Depth maps are ControlNet conditioning inputs.</p>
             </div>
-          )}
-        </div>
+            {!selectedLayerId && <p className="text-xs text-zinc-700">Select a layer to apply effects.</p>}
+          </div>
+        )}
 
-        <div className="p-3 mt-auto border-t border-zinc-800 space-y-1">
-          <button onClick={exportCanvas} className="w-full py-2 text-xs bg-pink-500/20 border border-pink-500/40 text-pink-300 hover:bg-pink-500/30 transition-all">Export PNG</button>
-          <button onClick={clearAll} className="w-full py-2 text-xs border border-zinc-800 text-zinc-600 hover:text-red-400 hover:border-red-800 transition-all">Clear all</button>
-          {saveStatus && <p className="text-center text-xs text-emerald-500 animate-pulse">✓ autosaved</p>}
-        </div>
+        {/* ── FILE TAB ── */}
+        {sideTab === "file" && (
+          <div className="p-3 space-y-4">
+            <div className="space-y-1">
+              <p className="text-xs text-zinc-600 uppercase tracking-widest">Import</p>
+              <button onClick={() => fileInputRef.current?.click()} className="w-full py-2 text-xs border border-dashed border-zinc-700 text-zinc-400 hover:border-pink-500 hover:text-pink-400 transition-all">Browse files…</button>
+              <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => { handleFiles(e.target.files); e.target.value = ""; }} />
+              <p className="text-xs text-zinc-700 text-center">or drop / paste anywhere</p>
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs text-zinc-600 uppercase tracking-widest">Export</p>
+              <button onClick={exportCanvas} className="w-full py-2 text-xs bg-pink-500/20 border border-pink-500/40 text-pink-300 hover:bg-pink-500/30 transition-all">↓ Export PNG</button>
+            </div>
+            <div className="pt-2 border-t border-zinc-800 space-y-1">
+              <button onClick={clearAll} className="w-full py-1.5 text-xs border border-zinc-800 text-zinc-600 hover:text-red-400 hover:border-red-800 transition-all">Clear all</button>
+              {saveStatus && <p className="text-center text-xs text-emerald-500 animate-pulse">✓ autosaved</p>}
+            </div>
+          </div>
+        )}
+
       </div>
+      )}
 
       {/* CANVAS */}
       <div ref={containerRef} className="flex-1 overflow-hidden relative bg-zinc-900"
