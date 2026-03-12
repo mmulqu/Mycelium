@@ -2,12 +2,41 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { ComfyUIClient } from './comfyui-client.js';
 import sd15Inpaint from '../comfyui-workflows/sd15-inpaint.json';
 import sdxlInpaint from '../comfyui-workflows/sdxl-inpaint-8gb.json';
+import surrealCollageStyle from '../style-guides/2026-03-12-surreal-photomontage-collage.json';
+import doreGoyaStyle from '../style-guides/2026-03-12-dore-goya-nordic-black.json';
 
 const SAM2_URL = "http://127.0.0.1:7861";
 
 const COMFY_WORKFLOWS = {
   "sd15-inpaint":    { label: "SD 1.5 Inpaint (4GB)",  template: sd15Inpaint },
   "sdxl-inpaint-8g": { label: "SDXL Inpaint (8GB)",    template: sdxlInpaint },
+};
+
+const STYLE_PRESETS = {
+  "surreal-collage": {
+    label: "Surreal Collage",
+    prompt: surrealCollageStyle.prompt_fragments.style_suffix + ", " + surrealCollageStyle.prompt_fragments.texture_suffix,
+    negative: surrealCollageStyle.prompt_fragments.negative_prompt,
+    denoise: surrealCollageStyle.comfyui_workflow_notes.recommended_denoise,
+  },
+  "surreal-figure": {
+    label: "Collage — Figure",
+    prompt: surrealCollageStyle.prompt_fragments.figure_suffix + ", " + surrealCollageStyle.prompt_fragments.style_suffix,
+    negative: surrealCollageStyle.prompt_fragments.negative_prompt,
+    denoise: 0.70,
+  },
+  "surreal-environment": {
+    label: "Collage — Environment",
+    prompt: surrealCollageStyle.prompt_fragments.environment_suffix + ", " + surrealCollageStyle.prompt_fragments.style_suffix,
+    negative: surrealCollageStyle.prompt_fragments.negative_prompt,
+    denoise: 0.75,
+  },
+  "dore-goya": {
+    label: "Doré / Goya Dark",
+    prompt: doreGoyaStyle.prompt_fragments.style_suffix + ", " + doreGoyaStyle.prompt_fragments.lighting_suffix,
+    negative: doreGoyaStyle.prompt_fragments.negative_prompt,
+    denoise: 0.70,
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -1936,6 +1965,20 @@ const [saveStatus, setSaveStatus] = useState("");
                   <option key={k} value={k}>{v.label}</option>
                 ))}
               </select>
+            </div>
+            <div>
+              <p className="text-xs text-zinc-600 mb-1">Style Preset</p>
+              <div className="flex flex-wrap gap-1">
+                {Object.entries(STYLE_PRESETS).map(([k, p]) => (
+                  <button key={k} onClick={() => {
+                    setComfyPrompt(p.prompt);
+                    setComfyNegPrompt(p.negative);
+                    setComfyDenoise(p.denoise);
+                  }} className="text-[10px] px-1.5 py-0.5 border border-zinc-700 text-zinc-400 hover:border-orange-500 hover:text-orange-300 transition-colors">
+                    {p.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <div>
               <p className="text-xs text-zinc-600 mb-1">Prompt</p>

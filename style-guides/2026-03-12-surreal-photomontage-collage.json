@@ -1,0 +1,210 @@
+{
+  "id": "surreal-photomontage-collage",
+  "date": "2026-03-12",
+  "title": "Surreal Photomontage / Vintage Collage",
+  "mood": "dreamlike displacement, impossible geography, the everyday made mythic, beauty built from fragments",
+
+  "influences": [
+    {
+      "name": "Hannah Höch",
+      "role": "Dada photomontage — cutting up the world to reveal its absurdity",
+      "keys": [
+        "figures constructed from mismatched sources as if they always belonged",
+        "bodies that are architecture, faces that are landscape",
+        "sharp scissor-edge cuts between incompatible realities",
+        "female figures reassembled by female logic, not male expectation",
+        "newspaper and magazine ephemera as raw material, never cleaned up"
+      ]
+    },
+    {
+      "name": "Max Ernst",
+      "role": "surrealist collage novels, layered impossible dreamscapes",
+      "keys": [
+        "Victorian engravings repurposed into nightmare and wonder",
+        "figures with animal or mechanical heads accepted without explanation",
+        "interiors that contain forests, forests that contain salons",
+        "scale as the primary surreal instrument — nothing the right size",
+        "narrative implied but never explained, the viewer must complete it"
+      ]
+    },
+    {
+      "name": "Eugenia Loli",
+      "role": "modern digital retro collage — psychedelic vintage precision",
+      "keys": [
+        "1950s–70s source photographs: beach scenes, advertisements, scientific diagrams",
+        "natural forms (mushrooms, insects, clouds) scaled to impossible dominance",
+        "backgrounds that feel period-correct but contain anachronistic intrusions",
+        "colour grading that makes everything feel like a found slide",
+        "humour and menace coexisting in the same image"
+      ]
+    },
+    {
+      "name": "Joe Webb",
+      "role": "minimal vintage photomontage — restraint as power",
+      "keys": [
+        "black and white vintage photograph as anchor",
+        "one burst of saturated botanical or natural colour as the only relief",
+        "pure black or white backgrounds, nothing competing",
+        "flowers, plants, birds erupting from human heads or hands",
+        "the contrast between monochrome figure and living colour makes both more vivid"
+      ]
+    },
+    {
+      "name": "1960s Psychedelic Poster Art (Griffin, Moscoso, Wilson)",
+      "role": "colour intensity, optical density, surreal natural scale",
+      "keys": [
+        "warm nocturnal palettes — teal sky, amber earth, deep green",
+        "light sources behaving like theatre: spot beams, aurora rays, halos",
+        "nature at heroic scale rendering humans into audience",
+        "starfields as backing texture, the cosmic as backdrop to the mundane",
+        "everything slightly too vivid to be real but too detailed to be fantasy"
+      ]
+    },
+    {
+      "name": "Joseph Cornell",
+      "role": "assemblage logic, intimate found-world curation",
+      "keys": [
+        "each element feels selected, not generated — it was found, not invented",
+        "taxonomic materials: maps, specimen labels, atlas pages, reward posters",
+        "the image is also an archive of the image-maker's obsessions",
+        "ephemera as equal citizen to photograph",
+        "text fragments allowed to bleed into the visual as texture"
+      ]
+    }
+  ],
+
+  "palette": {
+    "psychedelic_warm": ["#1a3a2e", "#0d4a4a", "#2a7a6a", "#e8a020", "#c85010", "#f0d060"],
+    "vintage_neutral": ["#c8b89a", "#a89070", "#d4c8b0", "#f0ece0", "#2a2018"],
+    "jewel_dark": ["#0a1a2e", "#1a0a2e", "#2e1a0a", "#c04020", "#e06030", "#4080a0"],
+    "bw_with_accent": ["#0a0a0a", "#f0f0f0", "#cccccc", "any single saturated hue as contrast"],
+    "forbidden": ["flat digital gradients", "neon glow", "pure RGB primaries without vintage grade", "antiseptic white backgrounds unless intentional contrast"]
+  },
+
+  "construction_principles": [
+    "SCALE VIOLATION is the primary surreal tool — make the small enormous, shrink the vast",
+    "CLEAN CUTS — edges are crisp, like physical scissors, no feathered blending between elements",
+    "LAYERED DEPTH — elements visibly sit on top of each other with intentional, owned overlap",
+    "SOURCE HETEROGENEITY — mix photograph, botanical illustration, engraving, newsprint, map, diagram in one image",
+    "HUMAN + NATURE FUSION — bodies host landscapes, heads explode into flora, figures become habitat",
+    "IMPOSSIBLE GEOGRAPHY — underwater mountains, beach with a cosmic ceiling, interiors opening to void",
+    "THEMATIC DENSITY — many symbols, each carrying weight, together building a surreal argument",
+    "FOUND MATERIAL FEEL — nothing should look generated from scratch; everything should feel sourced"
+  ],
+
+  "element_archetypes": {
+    "figures": [
+      "female portrait as axis — head, torso, or face as the canvas centre that other elements orbit",
+      "figures in period costume (Victorian, 1950s, Renaissance) placed in alien context",
+      "male figures often reduced to suits, uniforms, armour — identity via role not face",
+      "anatomy exposed: brains, ribcages, eyes multiplied, used decoratively not medically"
+    ],
+    "nature": [
+      "fungi — especially Amanita muscaria — at monumental scale",
+      "butterflies (especially Monarch) as symbol of transformation and fragility",
+      "crows and ravens perched with authority",
+      "botanical flowers (roses, poppies, anemones) in hyper-real clarity",
+      "insects: beetles, centipedes, moths used as jewellery or crown",
+      "ocean life placed in terrestrial or cosmic contexts"
+    ],
+    "ephemera": [
+      "vintage maps and atlas pages as backgrounds — topography as metaphor",
+      "reward posters, newspaper headlines, typeset labels bleeding into image",
+      "sheet music, book pages, handwritten text as texture layer",
+      "Victorian scientific diagrams — anatomical, botanical, astronomical",
+      "doilies, lace, gold decorative circles used as halos or frames"
+    ],
+    "skies_and_space": [
+      "starfields — deep space as background available to any scene",
+      "aurora or searchlight beams radiating from a central point",
+      "underwater caustic light patterns transplanted to terrestrial scenes",
+      "cloudscapes cut and repositioned inside interiors or over deserts"
+    ]
+  },
+
+  "lighting": [
+    "light as theatrical event — dramatic rays, god-beams, spotlight circles",
+    "nocturnal scenes lit from a single warm or cold source below or behind",
+    "vintage photography tone — slightly warm-shifted, as if aged or filtered",
+    "shadows are compositional shapes, not just absence of light",
+    "high-contrast B&W anchors with single saturated colour relief",
+    "underwater caustics used as ambient texture in non-underwater scenes"
+  ],
+
+  "textures": [
+    "vintage photo grain — the slight noise and halation of analog print",
+    "aged paper yellowing as underlying tone in lighter regions",
+    "engraving or woodcut linework on older illustrative elements",
+    "scan artifacts, newsprint dot patterns, ink bleed on text elements",
+    "no digital smoothness — every surface should feel like it has a material history"
+  ],
+
+  "compositional_rules": [
+    "central figure or face as gravitational anchor, other elements orbit or erupt from it",
+    "vertical element (giant mushroom, figure, beam of light) as primary axis",
+    "strong silhouette readability — the composition works as a shadow shape",
+    "foreground elements that break the frame or overlap the border",
+    "receding depth with multiple planes: close-up detail, mid-ground action, vast background",
+    "text and image cohabit — ephemera is not behind the image, it IS the image",
+    "symmetry broken deliberately — balance that slightly unnerves",
+    "crowded-yet-breathable: dense with elements but each has room to be seen"
+  ],
+
+  "how_to_build_one": {
+    "step_1_background": "Start with an impossible environment: a vintage beach scene re-skied with deep space, an atlas page covering the whole canvas, an underwater panorama merged with mountain photography.",
+    "step_2_anchor": "Place a central figure or dominant natural form (giant fungus, crowned creature, female portrait) that everything else will relate to.",
+    "step_3_scale_break": "Introduce at least one element at a scale that violates physical reality. This is the core surreal move.",
+    "step_4_ephemera_layer": "Add a layer of found-material texture: a map fragment, newsprint, botanical diagram, or reward poster. Blend mode Multiply or Overlay at low opacity.",
+    "step_5_nature_eruption": "Route natural elements (flowers, butterflies, birds, fungi) into or out of the human figure — from the head, from the chest, from the hands.",
+    "step_6_colour_grade": "Apply a unified vintage colour grade: warm shadows, slightly desaturated highlights, gentle yellow-brown tint over lights. OR strip to B&W and add one saturated element.",
+    "step_7_edges_and_cuts": "Ensure all elements have clean, crisp edges — not feathered. The scissor-cut look is essential. No gradient fade-outs at element borders.",
+    "step_8_text_fragments": "Optionally bleed text into the image as texture — titles, labels, numbers, partial words. Let them sit as equals with visual elements."
+  },
+
+  "prompt_fragments": {
+    "style_suffix": "surreal photomontage collage, vintage found-material aesthetic, clean scissor-cut edges, layered paper ephemera, Hannah Höch dada photomontage, Max Ernst surrealist collage, 1960s psychedelic poster, scale violation, impossible geography",
+    "figure_suffix": "female portrait as compositional axis, elements erupting from head, botanical flowers and ravens and exposed anatomy mixed with period clothing",
+    "environment_suffix": "vintage retro background (1950s beach / atlas map / underwater panorama), starfield sky, god-beam light rays radiating from horizon, nocturnal warm palette",
+    "texture_suffix": "analog film grain, aged paper yellowing, vintage photograph tones, newsprint dot texture, ephemera text fragments as visual texture",
+    "lighting_suffix": "theatrical spotlight beams, nocturnal scene, single warm light source below horizon, deep shadow with silver rim-light on organic forms",
+    "negative_prompt": "digital smooth gradients, feathered edges, neon glow, pure CGI render, antiseptic clean, modern minimalism, flat illustration, anime, 3D render artifacts, photorealistic studio lighting"
+  },
+
+  "inpaint_prompt_templates": {
+    "add_nature_to_figure": "botanical flowers erupting from [body part], lush roses and poppies cascading, vintage collage style, clean cut edges, surreal photomontage",
+    "scale_violation": "giant [subject] looming over tiny [scene], scale impossible, 1960s vintage aesthetic, nocturnal warm palette, surreal photomontage collage",
+    "ephemera_background": "vintage atlas map page, topographic lines, aged yellowed paper, faint text and numbers, collage texture layer",
+    "sky_replacement": "deep space starfield, aurora searchlight rays radiating from horizon, nocturnal teal and gold, vintage photograph grain",
+    "creature_with_crown": "surreal crowned creature assembled from [animal parts], jeweled regalia, monarch butterfly wings, impossible regal bearing, photomontage collage"
+  },
+
+  "search_terms": {
+    "openverse": [
+      "vintage collage surreal",
+      "dada photomontage",
+      "1950s beach advertisement",
+      "amanita muscaria illustration",
+      "vintage botanical illustration flowers",
+      "antique atlas map page",
+      "monarch butterfly macro photograph",
+      "Victorian anatomical diagram",
+      "vintage reward poster typography",
+      "starfield night sky photograph",
+      "underwater light caustics",
+      "crow raven photograph isolated",
+      "Victorian portrait photograph",
+      "mushroom fungus vintage illustration"
+    ]
+  },
+
+  "comfyui_workflow_notes": {
+    "best_model": "realistic-vision or dreamshaper for photomontage realism; stable-diffusion-xl for richer detail",
+    "recommended_denoise": 0.65,
+    "notes": [
+      "Use img2img inpaint for adding nature-eruption effects to existing figure layers",
+      "ControlNet Canny works well for preserving clean cut-out edge quality",
+      "ControlNet Depth helps maintain the layered-depth feel when adding background elements",
+      "Keep CFG 7–9 for photomontage blend — lower than pure generation to preserve source character"
+    ]
+  }
+}
