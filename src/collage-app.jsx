@@ -645,6 +645,10 @@ const [saveStatus, setSaveStatus] = useState("");
   const [regionClosed, setRegionClosed] = useState(false);
   const [regionMousePos, setRegionMousePos] = useState(null); // live cursor while drawing
   const lastRegionClickRef = useRef(0); // ms timestamp of last click (double-click detect)
+  const clearRegion = useCallback(() => {
+    setRegionPoints([]); setRegionClosed(false); setRegionMousePos(null);
+    lastRegionClickRef.current = 0;
+  }, []);
 
   // ComfyUI inpaint panel
   const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188");
@@ -1501,12 +1505,6 @@ const [saveStatus, setSaveStatus] = useState("");
     }
     setSamMask(null); setSamMaskDims(null);
   }, [samMask, samMaskDims, layers, updateLayer]);
-
-  // ─── REGION TOOL ─────────────────────────────────────────────────────────
-  const clearRegion = useCallback(() => {
-    setRegionPoints([]); setRegionClosed(false); setRegionMousePos(null);
-    lastRegionClickRef.current = 0;
-  }, []);
 
   // ─── COMFYUI INPAINT ──────────────────────────────────────────────────────
   /**

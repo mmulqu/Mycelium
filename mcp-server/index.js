@@ -1,10 +1,19 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { execFile } from "child_process";
+import { readdir, readFile } from "fs/promises";
+import { join, resolve, dirname } from "path";
+import { fileURLToPath } from "url";
 import { MyceliumCanvas } from "./engine/canvas.js";
 import { RD_PRESETS } from "./engine/rd.js";
 import { COLORMAPS } from "./engine/colormaps.js";
 import { EFFECTS } from "./engine/effects.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = resolve(__dirname, "..");
+const SAM2_URL = "http://127.0.0.1:7861";
+const COMFYUI_URL = "http://127.0.0.1:8188";
 
 const server = new McpServer({
   name: "mycelium",
@@ -142,7 +151,7 @@ server.tool(
 
 server.tool(
   "mycelium_effect_apply",
-  "Apply a pixel effect to a layer. Available effects: dither, pixelsort, invert, posterize, chromatic, glitch, threshold, halftone",
+  "Apply a pixel effect to a layer. Available effects: " + Object.keys(EFFECTS).join(", "),
   { effect: z.enum(Object.keys(EFFECTS)).describe("Effect name"),
     layer_id: z.string().optional().describe("Layer ID (defaults to selected layer)") },
   async ({ effect, layer_id }) => {
@@ -261,6 +270,333 @@ server.tool(
       { type: "image", data: b64, mimeType: "image/png" },
       { type: "text", text: `Iteration ${stepResult.iterations}.${frozenInfo} Full canvas snapshot.` },
     ] };
+  }
+);
+
+// ── Layer select ──
+
+server.tool(
+  "mycelium_layer_select",
+  "Select a layer as the active/current layer",
+  { layer_id: z.string().describe("Layer ID to select") },
+  async ({ layer_id }) => {
+    const ok = canvas.selectLayer(layer_id);
+    return { content: [{ type: "text", text: ok ? `Selected ${layer_id}` : "Layer not found" }] };
+  }
+);
+
+// ── Image search ──
+
+server.tool(
+  "mycelium_image_search",
+  "Search for images online and download them to disk. Sources: openverse (no API key), unsplash, pexels. " +
+  "Returns file paths of downloaded images which can then be added as layers.",
+  { query: z.string().describe("Search query"),
+    count: z.number().min(1).max(10).default(3).describe("Number of images to download"),
+    source: z.enum(["openverse", "unsplash", "pexels"]).default("openverse"),
+    orientation: z.enum(["landscape", "portrait", "square"]).optional(),
+    download_dir: z.string().optional().describe("Download directory (default: tools/image-search/downloads)") },
+  async ({ query, count, source, orientation, download_dir }) => {
+    const searchScript = join(PROJECT_ROOT, "tools", "image-search", "index.js");
+    const args = [searchScript, query, "--count", String(count), "--source", source, "--format", "json"];
+    if (orientation) args.push("--orientation", orientation);
+    if (download_dir) args.push("--dir", download_dir);
+
+    return new Promise((res) => {
+      execFile("node", args, { maxBuffer: 1024 * 1024, timeout: 30000 }, (err, stdout, stderr) => {
+        if (err) {
+          return res({ content: [{ type: "text", text: `Search failed: ${err.message}\n${stderr}` }] });
+        }
+        try {
+          const data = JSON.parse(stdout);
+          const summary = data.results.map((r, i) =>
+            `${i + 1}. ${r.filename} (${r.width}x${r.height}) — "${r.title}" by ${r.credit} [${r.license}]\n   ${r.path}`
+          ).join("\n");
+          return res({ content: [{ type: "text", text: `Downloaded ${data.results.length} images for "${query}":\n${summary}` }] });
+        } catch {
+          return res({ content: [{ type: "text", text: `Search output:\n${stdout}` }] });
+        }
+      });
+    });
+  }
+);
+
+// ── Style guides ──
+
+server.tool(
+  "mycelium_style_guide_list",
+  "List available style guide JSON files",
+  {},
+  async () => {
+    const dir = join(PROJECT_ROOT, "style-guides");
+    try {
+      const files = (await readdir(dir)).filter(f => f.endsWith(".json"));
+      if (files.length === 0) return { content: [{ type: "text", text: "No style guides found" }] };
+      return { content: [{ type: "text", text: `Style guides:\n${files.map(f => `  - ${f}`).join("\n")}` }] };
+    } catch {
+      return { content: [{ type: "text", text: "style-guides/ directory not found" }] };
+    }
+  }
+);
+
+server.tool(
+  "mycelium_style_guide_load",
+  "Load a style guide JSON and return its contents. Use this to understand the artistic direction for a session.",
+  { filename: z.string().describe("Style guide filename (e.g. '2026-03-12-dore-goya-nordic-black.json')") },
+  async ({ filename }) => {
+    const filePath = join(PROJECT_ROOT, "style-guides", filename);
+    try {
+      const data = await readFile(filePath, "utf-8");
+      return { content: [{ type: "text", text: data }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Failed to load: ${err.message}` }] };
+    }
+  }
+);
+
+// ── ComfyUI inpainting ──
+
+server.tool(
+  "mycelium_comfyui_status",
+  "Check if ComfyUI is running and reachable",
+  {},
+  async () => {
+    try {
+      const r = await fetch(`${COMFYUI_URL}/system_stats`, { signal: AbortSignal.timeout(2000) });
+      if (r.ok) {
+        const stats = await r.json();
+        return { content: [{ type: "text", text: `ComfyUI is running.\n${JSON.stringify(stats, null, 2)}` }] };
+      }
+      return { content: [{ type: "text", text: `ComfyUI responded with status ${r.status}` }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `ComfyUI not reachable at ${COMFYUI_URL}: ${err.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "mycelium_comfyui_inpaint",
+  "Run AI inpainting on a region of the canvas using ComfyUI. " +
+  "Renders the current canvas region, creates a mask, sends to ComfyUI, and adds the result as a new layer. " +
+  "Requires ComfyUI running locally. Workflows: sd15-inpaint (4GB VRAM), sdxl-inpaint-8g (8GB VRAM).",
+  { prompt: z.string().describe("What to paint in the masked region"),
+    negative_prompt: z.string().default("blurry, low quality, watermark, text, logo, cropped, deformed"),
+    workflow: z.enum(["sd15-inpaint", "sdxl-inpaint-8g"]).default("sd15-inpaint"),
+    region_x: z.number().describe("Region X coordinate on canvas"),
+    region_y: z.number().describe("Region Y coordinate on canvas"),
+    region_w: z.number().min(64).describe("Region width"),
+    region_h: z.number().min(64).describe("Region height"),
+    denoise: z.number().min(0).max(1).default(0.75).describe("Denoising strength (higher = more change)"),
+    steps: z.number().min(1).max(50).default(25),
+    cfg: z.number().min(1).max(20).default(7),
+    layer_name: z.string().optional().describe("Name for the result layer") },
+  async ({ prompt, negative_prompt, workflow, region_x, region_y, region_w, region_h, denoise, steps, cfg, layer_name }) => {
+    const { createCanvas: makeCanvas } = await import("@napi-rs/canvas");
+
+    // 1. Render the canvas region as the source image
+    const fullCanvas = canvas.render();
+    const regionCanvas = makeCanvas(Math.round(region_w), Math.round(region_h));
+    const rctx = regionCanvas.getContext("2d");
+    rctx.drawImage(fullCanvas, region_x, region_y, region_w, region_h, 0, 0, region_w, region_h);
+    const srcB64 = regionCanvas.toBuffer("image/png").toString("base64");
+    const srcDataUrl = `data:image/png;base64,${srcB64}`;
+
+    // 2. Create a white mask (inpaint entire region)
+    const maskCanvas = makeCanvas(Math.round(region_w), Math.round(region_h));
+    const mctx = maskCanvas.getContext("2d");
+    mctx.fillStyle = "white";
+    mctx.fillRect(0, 0, region_w, region_h);
+    const maskB64 = maskCanvas.toBuffer("image/png").toString("base64");
+    const maskDataUrl = `data:image/png;base64,${maskB64}`;
+
+    // 3. Load workflow template
+    const workflowPath = join(PROJECT_ROOT, "comfyui-workflows",
+      workflow === "sdxl-inpaint-8g" ? "sdxl-inpaint-8gb.json" : "sd15-inpaint.json");
+    const workflowTemplate = JSON.parse(await readFile(workflowPath, "utf-8"));
+
+    // 4. Upload images to ComfyUI
+    try {
+      const ts = Date.now();
+
+      async function uploadImage(dataUrl, filename) {
+        const raw = Buffer.from(dataUrl.split(",")[1], "base64");
+        const boundary = "----mcpboundary" + ts;
+        const crlf = "\r\n";
+        const parts = [
+          `--${boundary}${crlf}Content-Disposition: form-data; name="image"; filename="${filename}"${crlf}Content-Type: image/png${crlf}${crlf}`,
+        ];
+        const header = Buffer.from(parts[0]);
+        const footer = Buffer.from(`${crlf}--${boundary}--${crlf}`);
+        const body = Buffer.concat([header, raw, footer]);
+
+        const r = await fetch(`${COMFYUI_URL}/upload/image`, {
+          method: "POST",
+          headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
+          body,
+        });
+        if (!r.ok) throw new Error(`Upload failed: ${r.status}`);
+        const data = await r.json();
+        return data.name;
+      }
+
+      const [imgName, maskName] = await Promise.all([
+        uploadImage(srcDataUrl, `mycelium_src_${ts}.png`),
+        uploadImage(maskDataUrl, `mycelium_msk_${ts}.png`),
+      ]);
+
+      // 5. Fill template and queue
+      let json = JSON.stringify(workflowTemplate);
+      const subs = {
+        INPUT_IMAGE: imgName, MASK: maskName,
+        POSITIVE_PROMPT: prompt, NEGATIVE_PROMPT: negative_prompt,
+      };
+      for (const [key, val] of Object.entries(subs)) {
+        const escaped = String(val).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+        json = json.replaceAll(`__${key}__`, escaped);
+      }
+      for (const [key, val] of Object.entries({ DENOISE: denoise, STEPS: steps, CFG: cfg, SEED: Math.floor(Math.random() * 2 ** 31) })) {
+        json = json.replaceAll(`"__${key}__"`, String(val));
+      }
+      const filledWorkflow = JSON.parse(json);
+
+      const qr = await fetch(`${COMFYUI_URL}/prompt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: filledWorkflow }),
+      });
+      if (!qr.ok) throw new Error(`Queue failed: ${qr.status} — ${await qr.text()}`);
+      const { prompt_id } = await qr.json();
+
+      // 6. Poll for result
+      const deadline = Date.now() + 180_000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 2000));
+        const hr = await fetch(`${COMFYUI_URL}/history/${prompt_id}`);
+        if (!hr.ok) continue;
+        const history = await hr.json();
+        const entry = history[prompt_id];
+        if (!entry) continue;
+        if (entry.status?.status_str === "error") {
+          throw new Error("ComfyUI generation error");
+        }
+        for (const nodeOutput of Object.values(entry.outputs ?? {})) {
+          const imgs = nodeOutput.images;
+          if (!imgs?.length) continue;
+          const img = imgs[0];
+          const imgUrl = `${COMFYUI_URL}/view?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(img.subfolder ?? "")}&type=${img.type ?? "output"}`;
+          const imgResp = await fetch(imgUrl);
+          const imgBuf = Buffer.from(await imgResp.arrayBuffer());
+          const resultB64 = imgBuf.toString("base64");
+
+          // 7. Add result as layer
+          const result = await canvas.addImageFromBase64(resultB64, layer_name || `Inpaint: ${prompt.slice(0, 20)}`);
+          canvas.updateLayer(result.id, { x: region_x, y: region_y, scaleX: region_w / result.width, scaleY: region_h / result.height });
+
+          const snapshot = canvas.snapshotBase64();
+          return { content: [
+            { type: "image", data: snapshot, mimeType: "image/png" },
+            { type: "text", text: `Inpainted "${prompt}" → layer "${result.name}" (${result.id})` },
+          ] };
+        }
+      }
+      return { content: [{ type: "text", text: "ComfyUI timed out waiting for result" }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `ComfyUI inpaint failed: ${err.message}` }] };
+    }
+  }
+);
+
+// ── SAM2 segmentation ──
+
+server.tool(
+  "mycelium_sam2_status",
+  "Check if the SAM2 segmentation server is running",
+  {},
+  async () => {
+    try {
+      const r = await fetch(`${SAM2_URL}/health`, { signal: AbortSignal.timeout(2000) });
+      if (r.ok) {
+        const data = await r.json();
+        return { content: [{ type: "text", text: `SAM2 server running on ${data.device}${data.gpu ? ` (${data.gpu})` : ""}` }] };
+      }
+      return { content: [{ type: "text", text: `SAM2 responded with status ${r.status}` }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `SAM2 not reachable at ${SAM2_URL}: ${err.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "mycelium_sam2_segment",
+  "Use SAM2 AI to segment an object from a layer by clicking a point. " +
+  "Embeds the layer image, predicts a mask at the click point, and creates a new masked layer. " +
+  "Requires SAM2 server running (python tools/sam2-server/server.py).",
+  { layer_id: z.string().optional().describe("Layer to segment (defaults to selected)"),
+    point_x: z.number().describe("X coordinate on the layer image (in layer pixel coords)"),
+    point_y: z.number().describe("Y coordinate on the layer image (in layer pixel coords)"),
+    foreground: z.boolean().default(true).describe("true=select object, false=exclude region"),
+    layer_name: z.string().optional().describe("Name for the segmented layer") },
+  async ({ layer_id, point_x, point_y, foreground, layer_name }) => {
+    const { createCanvas: makeCanvas } = await import("@napi-rs/canvas");
+
+    // Find layer
+    const lid = layer_id || canvas.selectedLayerId;
+    const layer = canvas.layers.find(l => l.id === lid);
+    if (!layer || !layer._img) return { content: [{ type: "text", text: "Layer not found" }] };
+
+    // Render layer to PNG
+    const w = layer._imgWidth, h = layer._imgHeight;
+    const tc = makeCanvas(w, h);
+    tc.getContext("2d").drawImage(layer._img, 0, 0);
+    const b64 = tc.toBuffer("image/png").toString("base64");
+    const dataUrl = `data:image/png;base64,${b64}`;
+
+    try {
+      // Embed image
+      const embedResp = await fetch(`${SAM2_URL}/embed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: dataUrl }),
+      });
+      if (!embedResp.ok) throw new Error(`Embed failed: ${embedResp.status}`);
+      const { session_id } = await embedResp.json();
+
+      // Predict mask
+      const predResp = await fetch(`${SAM2_URL}/predict`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id, point_x, point_y, label: foreground ? 1 : 0 }),
+      });
+      if (!predResp.ok) throw new Error(`Predict failed: ${predResp.status}`);
+      const { mask: maskDataUrl, score } = await predResp.json();
+
+      // Clean up session
+      fetch(`${SAM2_URL}/session/${session_id}`, { method: "DELETE" }).catch(() => {});
+
+      // Apply mask: composite layer image with mask as alpha
+      const { loadImage } = await import("@napi-rs/canvas");
+      const maskBuf = Buffer.from(maskDataUrl.split(",")[1], "base64");
+      const maskImg = await loadImage(maskBuf);
+
+      const resultCanvas = makeCanvas(w, h);
+      const rctx = resultCanvas.getContext("2d");
+      rctx.drawImage(layer._img, 0, 0);
+      // Use mask as alpha: where mask is white, keep pixels; where black, make transparent
+      rctx.globalCompositeOperation = "destination-in";
+      rctx.drawImage(maskImg, 0, 0, w, h);
+
+      const resultB64 = resultCanvas.toBuffer("image/png").toString("base64");
+      const result = await canvas.addImageFromBase64(resultB64, layer_name || `Segment: ${layer.name}`);
+      canvas.updateLayer(result.id, { x: layer.x, y: layer.y, scaleX: layer.scaleX, scaleY: layer.scaleY, rotation: layer.rotation });
+
+      const snapshot = canvas.snapshotBase64();
+      return { content: [
+        { type: "image", data: snapshot, mimeType: "image/png" },
+        { type: "text", text: `Segmented from "${layer.name}" → "${result.name}" (${result.id}), score: ${score.toFixed(3)}` },
+      ] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `SAM2 segmentation failed: ${err.message}` }] };
+    }
   }
 );
 
