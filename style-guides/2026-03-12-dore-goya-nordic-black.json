@@ -1,0 +1,152 @@
+{
+  "id": "dore-goya-nordic-black",
+  "date": "2026-03-12",
+  "title": "Doré / Goya / Nordic Gloomy / Munch Troll / Burzum Hvis",
+  "mood": "stark romanticism, forest horror, folkloric dread, sacred darkness",
+
+  "influences": [
+    {
+      "name": "Gustave Doré",
+      "role": "compositional architecture, engraving texture",
+      "keys": [
+        "dense cross-hatching etched into shadow",
+        "cathedral-scale drama in natural scenes",
+        "silver-grey light cutting through black masses",
+        "figures dwarfed by sublime verticality",
+        "intricate foliage rendered as black lace"
+      ]
+    },
+    {
+      "name": "Francisco Goya",
+      "role": "psychological horror, grotesque humanity",
+      "keys": [
+        "earth-brown and black pigment, barely any hue",
+        "figures emerging from mud-dark backgrounds",
+        "Saturn-eye vacancy, open mouths mid-scream",
+        "war-pastoral — violence in ordinary fields",
+        "paint applied like it was smeared in grief"
+      ]
+    },
+    {
+      "name": "Nordic Romantic painters (Dahl, Tidemand, Fearnley)",
+      "role": "landscape mood, nature as spiritual threat",
+      "keys": [
+        "midnight blue above frozen farm fields",
+        "birch groves at the edge of cleared land",
+        "snowlight — the only illumination, cold and flat",
+        "farmsteads as small warm rectangles against black forest",
+        "sky that feels heavier than the earth",
+        "waterfalls as white gashes in dark rock"
+      ]
+    },
+    {
+      "name": "Edvard Munch (troll phase)",
+      "role": "folkloric wrongness, haunted figures",
+      "keys": [
+        "faces that have become landscape",
+        "the troll is the tree is the old woman",
+        "colour reduced to bile-green, bruise-purple, corpse-white",
+        "figures that look like they grew there, not arrived",
+        "anxiety rendered as weather",
+        "children watching something in the dark that adults cannot see"
+      ]
+    },
+    {
+      "name": "Burzum — Hvis lyset tar oss (1994)",
+      "role": "texture, grain, sacred lo-fi darkness",
+      "keys": [
+        "image so dark detail requires searching",
+        "grain as a spiritual layer — not noise, but veil",
+        "forest canopy closing over a path that leads nowhere good",
+        "the cover asks: what if the light leaves and does not come back",
+        "monochrome with one cold hue bleeding through",
+        "beauty that is also a warning"
+      ]
+    }
+  ],
+
+  "palette": {
+    "primaries": [
+      "#0a0a0d",
+      "#111018",
+      "#1c1a24"
+    ],
+    "midtones": [
+      "#2e2c38",
+      "#3d3b2f",
+      "#4a4035"
+    ],
+    "accents": [
+      "#6b7c5e",
+      "#8a7a5a",
+      "#a09080"
+    ],
+    "lights": [
+      "#c8c0b0",
+      "#d4cfc4",
+      "#e8e0d0"
+    ],
+    "forbidden": ["pure white", "saturated red", "sky blue", "anything cheerful"]
+  },
+
+  "lighting": [
+    "light arrives as survival, not comfort",
+    "single cold source — moon, a window, distant fire",
+    "shadows eat more than half the canvas",
+    "no fill light — darkness is the default state",
+    "silver rim-light on trees and figures",
+    "light from below suggests ritual or wrongness"
+  ],
+
+  "textures": [
+    "engraving cross-hatch over everything",
+    "heavy grain — film or printing-plate origin",
+    "wet bark surface on all organic forms",
+    "old paper stain beneath the image",
+    "ink bleeding at edges",
+    "frost on glass as compositional element"
+  ],
+
+  "compositional_rules": [
+    "vertical dominance — trees, cliffs, standing figures",
+    "human element is small and possibly lost",
+    "frame edges can be dark — vignette is structural not decorative",
+    "horizon very low OR hidden entirely by canopy",
+    "negative space is active — forest darkness is a character",
+    "symmetry that is almost right but subtly wrong"
+  ],
+
+  "subject_affinities": [
+    "old-growth forest at last light",
+    "snow-covered fields, single farmhouse far back",
+    "standing stones or cairns at midnight",
+    "figures in cloaks moving away from viewer",
+    "animals that might be something else",
+    "bare winter branches against overcast sky",
+    "frozen river or lake with fog above",
+    "ritual fires, distant and small",
+    "abandoned structures reclaimed by forest",
+    "mountain passes in weather",
+    "bridges over gorges, no destination visible"
+  ],
+
+  "prompt_fragments": {
+    "style_suffix": "in the style of Gustave Doré engravings and Goya black paintings, Nordic romantic landscape painting, Edvard Munch trollish horror, Burzum black metal artwork, heavy grain, cross-hatch texture, stark romanticism",
+    "lighting_suffix": "lit by cold moonlight only, deep shadow consuming foreground, silver rim-light on organic forms, no fill light",
+    "mood_suffix": "atmosphere of sacred dread, folkloric unease, the forest as spiritual threat, beauty that is also a warning",
+    "negative_prompt": "colorful, bright, cheerful, sunny, saturated, clean, digital smooth, anime, cartoon, photorealistic skin, stock photo"
+  },
+
+  "search_terms": {
+    "openverse": [
+      "dark forest engraving",
+      "nordic landscape painting gloomy",
+      "winter forest moonlight",
+      "gothic romanticism landscape",
+      "Doré engraving forest",
+      "black and white nature etching",
+      "Munch landscape painting",
+      "northern romanticism painting snow"
+    ]
+  }
+}
