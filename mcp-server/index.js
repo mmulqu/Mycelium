@@ -147,6 +147,66 @@ server.tool(
   }
 );
 
+// ── Layer Transform Operations ──
+
+server.tool(
+  "mycelium_layer_flip",
+  "Flip a layer horizontally or vertically",
+  { layer_id: z.string().optional().describe("Layer ID (defaults to selected)"),
+    axis: z.enum(["h", "v"]).describe("'h' for horizontal, 'v' for vertical") },
+  async ({ layer_id, axis }) => {
+    const ok = canvas.flipLayer(layer_id, axis);
+    return { content: [{ type: "text", text: ok ? `Flipped ${axis === "h" ? "horizontal" : "vertical"}` : "Layer not found" }] };
+  }
+);
+
+server.tool(
+  "mycelium_layer_rotate90",
+  "Rotate a layer 90 degrees clockwise or counter-clockwise",
+  { layer_id: z.string().optional().describe("Layer ID (defaults to selected)"),
+    direction: z.enum(["cw", "ccw"]).describe("'cw' for clockwise, 'ccw' for counter-clockwise") },
+  async ({ layer_id, direction }) => {
+    const ok = canvas.rotateLayer90(layer_id, direction);
+    return { content: [{ type: "text", text: ok ? `Rotated 90° ${direction}` : "Layer not found" }] };
+  }
+);
+
+server.tool(
+  "mycelium_layer_resize",
+  "Resize a layer's image data to specific pixel dimensions",
+  { layer_id: z.string().optional().describe("Layer ID (defaults to selected)"),
+    width: z.number().int().positive().describe("New width in pixels"),
+    height: z.number().int().positive().describe("New height in pixels") },
+  async ({ layer_id, width, height }) => {
+    const ok = canvas.resizeLayer(layer_id, width, height);
+    return { content: [{ type: "text", text: ok ? `Resized to ${width}×${height}` : "Layer not found" }] };
+  }
+);
+
+server.tool(
+  "mycelium_layer_crop",
+  "Crop a layer's image to a rectangular region (in image-space pixel coordinates)",
+  { layer_id: z.string().optional().describe("Layer ID (defaults to selected)"),
+    x: z.number().int().describe("Left edge of crop rectangle"),
+    y: z.number().int().describe("Top edge of crop rectangle"),
+    width: z.number().int().positive().describe("Crop width in pixels"),
+    height: z.number().int().positive().describe("Crop height in pixels") },
+  async ({ layer_id, x, y, width, height }) => {
+    const ok = canvas.cropLayer(layer_id, x, y, width, height);
+    return { content: [{ type: "text", text: ok ? `Cropped to ${width}×${height} at (${x},${y})` : "Layer not found" }] };
+  }
+);
+
+server.tool(
+  "mycelium_layer_flatten",
+  "Flatten all visible layers into a single layer",
+  {},
+  async () => {
+    const result = canvas.flattenLayers();
+    return { content: [{ type: "text", text: `Flattened to "${result.name}" (${result.id})` }] };
+  }
+);
+
 // ── Effects ──
 
 server.tool(

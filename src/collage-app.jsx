@@ -773,16 +773,26 @@ const [saveStatus, setSaveStatus] = useState("");
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && e.shiftKey) { e.preventDefault(); redo(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); redo(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !e.shiftKey) { e.preventDefault(); copyLayer(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'x' && !e.shiftKey) { e.preventDefault(); cutLayer(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) { e.preventDefault(); pasteLayer(); }
       if (e.key === 'Escape') {
         if (regionPoints.length > 0) clearRegion();
       }
       if (e.key === 'Enter' && tool === TOOLS.REGION && !regionClosed && regionPoints.length >= 3) {
         setRegionClosed(true);
       }
+      // Delete selected layer with Delete/Backspace
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedLayerId && !e.ctrlKey && !e.metaKey) {
+        const el = document.activeElement;
+        if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' && el.tagName !== 'SELECT')) {
+          e.preventDefault(); deleteLayer(selectedLayerId);
+        }
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [undo, redo, regionPoints, clearRegion, tool, regionClosed]);
+  }, [undo, redo, copyLayer, cutLayer, pasteLayer, selectedLayerId, regionPoints, clearRegion, tool, regionClosed]);
 
   // Auto-open the AI tab when switching to AI-powered tools
   useEffect(() => {
@@ -1290,6 +1300,168 @@ const [saveStatus, setSaveStatus] = useState("");
   };
 
   const clearClip = () => { if (selectedLayerId) updateLayer(selectedLayerId, { clipPath: null }); };
+
+  // ─── FLIP / ROTATE / CROP / RESIZE / CUT / COPY / PASTE ───
+
+  const flipLayer = (axis) => {
+    const layer = layers.find(l => l.id === selectedLayerId);
+    if (!layer?.imageData) return;
+    const img = new Image();
+    img.onload = () => {
+      const tc = document.createElement("canvas"); tc.width = img.width; tc.height = img.height;
+      const tCtx = tc.getContext("2d");
+      if (axis === "h") { tCtx.translate(img.width, 0); tCtx.scale(-1, 1); }
+      else { tCtx.translate(0, img.height); tCtx.scale(1, -1); }
+      tCtx.drawImage(img, 0, 0);
+      updateLayer(selectedLayerId, { imageData: tc.toDataURL("image/png") });
+    };
+    img.src = layer.imageData;
+  };
+
+  const rotateLayer90 = (dir) => {
+    const layer = layers.find(l => l.id === selectedLayerId);
+    if (!layer?.imageData) return;
+    const img = new Image();
+    img.onload = () => {
+      const tc = document.createElement("canvas");
+      tc.width = img.height; tc.height = img.width;
+      const tCtx = tc.getContext("2d");
+      if (dir === "cw") {
+        tCtx.translate(img.height, 0); tCtx.rotate(Math.PI / 2);
+      } else {
+        tCtx.translate(0, img.width); tCtx.rotate(-Math.PI / 2);
+      }
+      tCtx.drawImage(img, 0, 0);
+      updateLayer(selectedLayerId, { imageData: tc.toDataURL("image/png") });
+    };
+    img.src = layer.imageData;
+  };
+
+  const cropToClip = () => {
+    const layer = layers.find(l => l.id === selectedLayerId);
+    if (!layer?.imageData || !layer.clipPath?.length) return;
+    const img = new Image();
+    img.onload = () => {
+      // Convert clip path from canvas coords to image-space coords
+      const pts = layer.clipPath.map(p => ({
+        x: (p.x - layer.x) / layer.scaleX,
+        y: (p.y - layer.y) / layer.scaleY,
+      }));
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of pts) {
+        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+      }
+      minX = Math.max(0, Math.floor(minX)); minY = Math.max(0, Math.floor(minY));
+      maxX = Math.min(img.width, Math.ceil(maxX)); maxY = Math.min(img.height, Math.ceil(maxY));
+      const cropW = maxX - minX, cropH = maxY - minY;
+      if (cropW <= 0 || cropH <= 0) return;
+      const tc = document.createElement("canvas"); tc.width = cropW; tc.height = cropH;
+      const tCtx = tc.getContext("2d");
+      // Draw clip mask
+      tCtx.beginPath();
+      const localPts = pts.map(p => ({ x: p.x - minX, y: p.y - minY }));
+      tCtx.moveTo(localPts[0].x, localPts[0].y);
+      for (let i = 1; i < localPts.length; i++) tCtx.lineTo(localPts[i].x, localPts[i].y);
+      tCtx.closePath(); tCtx.clip();
+      tCtx.drawImage(img, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+      // Update position to account for crop offset
+      const newX = layer.x + minX * layer.scaleX;
+      const newY = layer.y + minY * layer.scaleY;
+      updateLayer(selectedLayerId, { imageData: tc.toDataURL("image/png"), clipPath: null, x: newX, y: newY });
+    };
+    img.src = layer.imageData;
+  };
+
+  const resizeLayerPixels = (newW, newH) => {
+    const layer = layers.find(l => l.id === selectedLayerId);
+    if (!layer?.imageData || newW <= 0 || newH <= 0) return;
+    const img = new Image();
+    img.onload = () => {
+      const tc = document.createElement("canvas"); tc.width = newW; tc.height = newH;
+      tc.getContext("2d").drawImage(img, 0, 0, newW, newH);
+      updateLayer(selectedLayerId, { imageData: tc.toDataURL("image/png"), scaleX: 1, scaleY: 1 });
+    };
+    img.src = layer.imageData;
+  };
+
+  // Layer clipboard for cut/copy/paste
+  const layerClipboardRef = useRef(null);
+
+  const copyLayer = useCallback(() => {
+    const layer = layers.find(l => l.id === selectedLayerId);
+    if (!layer) return;
+    layerClipboardRef.current = { ...layer };
+  }, [layers, selectedLayerId]);
+
+  const cutLayer = useCallback(() => {
+    const layer = layers.find(l => l.id === selectedLayerId);
+    if (!layer) return;
+    layerClipboardRef.current = { ...layer };
+    deleteLayer(layer.id);
+  }, [layers, selectedLayerId]);
+
+  const pasteLayer = useCallback(() => {
+    if (!layerClipboardRef.current) return;
+    const src = layerClipboardRef.current;
+    const nl = { ...src, id: uid(), name: src.name + " (paste)", x: src.x + 20, y: src.y + 20 };
+    setLayers(prev => [nl, ...prev]);
+    setSelectedLayerId(nl.id);
+  }, []);
+
+  const flattenLayers = () => {
+    if (layers.length < 2) return;
+    const c = canvasRef.current;
+    if (!c) return;
+    // Re-render the full canvas to capture the current composite
+    const tc = document.createElement("canvas"); tc.width = canvasSize.width; tc.height = canvasSize.height;
+    const tCtx = tc.getContext("2d");
+    // Render all visible layers bottom-to-top
+    const sorted = [...layers].reverse();
+    let remaining = 0;
+    const imgs = new Map();
+    for (const layer of sorted) {
+      if (!layer.visible || !layer.imageData) continue;
+      remaining++;
+      const limg = new Image();
+      limg.onload = () => {
+        imgs.set(layer.id, limg);
+        remaining--;
+        if (remaining === 0) finishFlatten();
+      };
+      limg.src = layer.imageData;
+    }
+    if (remaining === 0) return;
+    const finishFlatten = () => {
+      for (const layer of sorted) {
+        if (!layer.visible || !layer.imageData) continue;
+        const limg = imgs.get(layer.id);
+        if (!limg) continue;
+        tCtx.save();
+        tCtx.globalAlpha = layer.opacity;
+        tCtx.globalCompositeOperation = layer.blendMode || "source-over";
+        const w = limg.width * layer.scaleX, h = limg.height * layer.scaleY;
+        tCtx.translate(layer.x + w / 2, layer.y + h / 2);
+        tCtx.rotate((layer.rotation * Math.PI) / 180);
+        tCtx.translate(-w / 2, -h / 2);
+        if (layer.clipPath?.length > 2) {
+          tCtx.beginPath();
+          for (const p of layer.clipPath) tCtx.lineTo(p.x - layer.x, p.y - layer.y);
+          tCtx.closePath(); tCtx.clip();
+        }
+        tCtx.drawImage(limg, 0, 0, w, h);
+        tCtx.restore();
+      }
+      const flat = {
+        id: uid(), name: "Flattened", visible: true, locked: false, opacity: 1,
+        blendMode: "source-over", x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0,
+        imageData: tc.toDataURL("image/png"), clipPath: null,
+      };
+      setLayers([flat]);
+      setSelectedLayerId(flat.id);
+    };
+  };
+
   const exportCanvas = () => { const c = canvasRef.current; const a = document.createElement("a"); a.download = `collage_${Date.now()}.png`; a.href = c.toDataURL("image/png"); a.click(); };
   const clearAll = async () => { setLayers([]); setDrawingPaths([]); setSelectedLayerId(null); setShowWelcome(true); resetDream(); try { await window.storage.delete("collage:current"); } catch {} };
 
@@ -2221,7 +2393,10 @@ const [saveStatus, setSaveStatus] = useState("");
       <div className="w-60 flex-shrink-0 border-l border-zinc-800 flex flex-col bg-zinc-950">
         <div className="p-3 border-b border-zinc-800 flex items-center justify-between">
           <p className="text-xs text-zinc-600 uppercase tracking-widest">Layers</p>
-          <span className="text-xs text-zinc-700">{layers.length}</span>
+          <div className="flex items-center gap-2">
+            {layers.length > 1 && <button onClick={flattenLayers} title="Flatten all visible layers" className="text-xs text-zinc-600 hover:text-zinc-300">flatten</button>}
+            <span className="text-xs text-zinc-700">{layers.length}</span>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
           {layers.map(layer => (
@@ -2260,6 +2435,30 @@ const [saveStatus, setSaveStatus] = useState("");
                       {layer.locked ? "locked" : "lock"}</button>
                     <button onClick={e => { e.stopPropagation(); deleteLayer(layer.id); }}
                       className="flex-1 py-1 text-xs border border-zinc-700 text-zinc-500 hover:text-red-400 hover:border-red-700">del</button>
+                  </div>
+                  <div className="flex gap-1 pt-1">
+                    <button onClick={e => { e.stopPropagation(); flipLayer("h"); }} title="Flip Horizontal"
+                      className="flex-1 py-1 text-xs border border-zinc-700 text-zinc-500 hover:text-zinc-200 hover:border-zinc-500">↔ flip</button>
+                    <button onClick={e => { e.stopPropagation(); flipLayer("v"); }} title="Flip Vertical"
+                      className="flex-1 py-1 text-xs border border-zinc-700 text-zinc-500 hover:text-zinc-200 hover:border-zinc-500">↕ flip</button>
+                  </div>
+                  <div className="flex gap-1 pt-1">
+                    <button onClick={e => { e.stopPropagation(); rotateLayer90("ccw"); }} title="Rotate 90° CCW"
+                      className="flex-1 py-1 text-xs border border-zinc-700 text-zinc-500 hover:text-zinc-200 hover:border-zinc-500">↶ 90°</button>
+                    <button onClick={e => { e.stopPropagation(); rotateLayer90("cw"); }} title="Rotate 90° CW"
+                      className="flex-1 py-1 text-xs border border-zinc-700 text-zinc-500 hover:text-zinc-200 hover:border-zinc-500">↷ 90°</button>
+                    {layer.clipPath?.length > 2 && (
+                      <button onClick={e => { e.stopPropagation(); cropToClip(); }} title="Crop to Clip Path"
+                        className="flex-1 py-1 text-xs border border-emerald-700 text-emerald-500 hover:text-emerald-300 hover:border-emerald-500">crop</button>
+                    )}
+                  </div>
+                  <div className="flex gap-1 pt-1">
+                    <button onClick={e => { e.stopPropagation(); copyLayer(); }} title="Copy (Ctrl+C)"
+                      className="flex-1 py-1 text-xs border border-zinc-700 text-zinc-500 hover:text-zinc-200 hover:border-zinc-500">copy</button>
+                    <button onClick={e => { e.stopPropagation(); cutLayer(); }} title="Cut (Ctrl+X)"
+                      className="flex-1 py-1 text-xs border border-zinc-700 text-zinc-500 hover:text-zinc-200 hover:border-zinc-500">cut</button>
+                    <button onClick={e => { e.stopPropagation(); pasteLayer(); }} title="Paste (Ctrl+V)"
+                      className="flex-1 py-1 text-xs border border-zinc-700 text-zinc-500 hover:text-zinc-200 hover:border-zinc-500">paste</button>
                   </div>
                 </div>
               )}

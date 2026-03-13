@@ -107,6 +107,76 @@ export class MyceliumCanvas {
     return true;
   }
 
+  // ── Flip / Rotate / Crop / Resize ──
+
+  flipLayer(id, axis = "h") {
+    const l = this.layers.find(l => l.id === (id || this.selectedLayerId));
+    if (!l || !l._img) return false;
+    const w = l._imgWidth, h = l._imgHeight;
+    const tc = createCanvas(w, h);
+    const tctx = tc.getContext("2d");
+    if (axis === "h") { tctx.translate(w, 0); tctx.scale(-1, 1); }
+    else { tctx.translate(0, h); tctx.scale(1, -1); }
+    tctx.drawImage(l._img, 0, 0);
+    l._img = tc;
+    return true;
+  }
+
+  rotateLayer90(id, dir = "cw") {
+    const l = this.layers.find(l => l.id === (id || this.selectedLayerId));
+    if (!l || !l._img) return false;
+    const w = l._imgWidth, h = l._imgHeight;
+    const tc = createCanvas(h, w);
+    const tctx = tc.getContext("2d");
+    if (dir === "cw") { tctx.translate(h, 0); tctx.rotate(Math.PI / 2); }
+    else { tctx.translate(0, w); tctx.rotate(-Math.PI / 2); }
+    tctx.drawImage(l._img, 0, 0);
+    l._img = tc;
+    l._imgWidth = h;
+    l._imgHeight = w;
+    return true;
+  }
+
+  resizeLayer(id, newW, newH) {
+    const l = this.layers.find(l => l.id === (id || this.selectedLayerId));
+    if (!l || !l._img || newW <= 0 || newH <= 0) return false;
+    const tc = createCanvas(newW, newH);
+    tc.getContext("2d").drawImage(l._img, 0, 0, newW, newH);
+    l._img = tc;
+    l._imgWidth = newW;
+    l._imgHeight = newH;
+    l.scaleX = 1;
+    l.scaleY = 1;
+    return true;
+  }
+
+  cropLayer(id, x, y, w, h) {
+    const l = this.layers.find(l => l.id === (id || this.selectedLayerId));
+    if (!l || !l._img) return false;
+    if (w <= 0 || h <= 0) return false;
+    const tc = createCanvas(w, h);
+    tc.getContext("2d").drawImage(l._img, x, y, w, h, 0, 0, w, h);
+    l._img = tc;
+    l._imgWidth = w;
+    l._imgHeight = h;
+    l.x += x * l.scaleX;
+    l.y += y * l.scaleY;
+    return true;
+  }
+
+  flattenLayers() {
+    const canvas = this.render();
+    const flat = {
+      id: uid(), name: "Flattened",
+      visible: true, locked: false, opacity: 1, blendMode: "source-over",
+      x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, clipPath: null,
+      _img: canvas, _imgWidth: this.width, _imgHeight: this.height,
+    };
+    this.layers = [flat];
+    this.selectedLayerId = flat.id;
+    return { id: flat.id, name: flat.name };
+  }
+
   // ── Effects ──
 
   applyEffect(layerId, effectName) {
